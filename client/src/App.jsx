@@ -12,30 +12,38 @@ export default function App() {
   const [serverOrigin, setServerOrigin] = useState(() => resolveServerOrigin());
   const [calendar, setCalendar] = useState(null);
   const [username, setUsername] = useState('');
-  const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' or 'settings'
+  const [activeTab, setActiveTab] = useState('calendar');
   const [notifications, setNotifications] = useState([]);
-  const [wsStatus, setWsStatus] = useState('disconnected'); // 'connecting', 'connected', 'disconnected'
+  const [wsStatus, setWsStatus] = useState('disconnected');
+  const [restoring, setRestoring] = useState(true);
+  const [fetchError, setFetchError] = useState('');
 
   const API_BASE_URL = useMemo(() => getApiBaseUrl(serverOrigin), [serverOrigin]);
   const WS_BASE_URL = useMemo(() => getWsBaseUrl(serverOrigin), [serverOrigin]);
   
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptRef = useRef(0);
 
   // 1. Restore session on mount
   useEffect(() => {
+    setRestoring(true);
+    setFetchError('');
     const savedCode = localStorage.getItem('cocalendar_code');
     const savedUser = localStorage.getItem('cocalendar_user');
 
     if (savedCode && savedUser && API_BASE_URL) {
       setUsername(savedUser);
       fetchCalendar(savedCode, savedUser);
+    } else {
+      setRestoring(false);
     }
   }, [API_BASE_URL]);
 
   // 2. Fetch full calendar state (used during initialization and manual refresh)
   const fetchCalendar = async (code, user) => {
     try {
+      setFetchError('');
       setWsStatus('connecting');
       const response = await fetch(`${API_BASE_URL}/api/calendar/${code.toUpperCase()}`);
       if (!response.ok) {
@@ -45,15 +53,14 @@ export default function App() {
       setCalendar(data);
       setUsername(user);
       
-      // Save to localStorage
       localStorage.setItem('cocalendar_code', data.code);
       localStorage.setItem('cocalendar_user', user);
+      setRestoring(false);
     } catch (err) {
       console.error(err);
-      // If code doesn't exist anymore, clear local storage
-      localStorage.removeItem('cocalendar_code');
-      localStorage.removeItem('cocalendar_user');
       setCalendar(null);
+      setRestoring(false);
+      setFetchError(err.message);
     }
   };
 
@@ -109,20 +116,20 @@ export default function App() {
   useEffect(() => {
     if (!calendar || !username || !WS_BASE_URL) return;
 
+    reconnectAttemptRef.current = 0;
+
     const connectWebSocket = () => {
       if (wsRef.current) {
         wsRef.current.close();
       }
 
-      console.log('Connecting to WebSocket at:', WS_BASE_URL);
       setWsStatus('connecting');
       const ws = new WebSocket(WS_BASE_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('WebSocket Connected');
         setWsStatus('connected');
-        // Register to the calendar room
+        reconnectAttemptRef.current = 0;
         ws.send(JSON.stringify({
           type: 'join',
           code: calendar.code,
@@ -135,26 +142,21 @@ export default function App() {
           const data = JSON.parse(event.data);
           
           if (data.type === 'sync') {
-            // Update calendar events
             setCalendar(prev => prev ? { ...prev, events: data.events } : null);
           }
           
           if (data.type === 'notification' && data.notification) {
             const { message, type, id } = data.notification;
             
-            // Add toast notification
             setNotifications(prev => [...prev, { id, type, message }]);
             
-            // Play sound and trigger vibration
             playNotificationSound();
             if ('vibrate' in navigator) {
               navigator.vibrate([100, 50, 100]);
             }
 
-            // Trigger OS level push notification
             showSystemNotification(message);
             
-            // Auto remove toast after 4s
             setTimeout(() => {
               removeNotification(id);
             }, 4000);
@@ -165,9 +167,11 @@ export default function App() {
       };
 
       ws.onclose = () => {
-        console.log('WebSocket Disconnected, attempting reconnect in 5s...');
         setWsStatus('disconnected');
-        reconnectTimeoutRef.current = setTimeout(connectWebSocket, 5000);
+        const attempt = reconnectAttemptRef.current;
+        const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+        reconnectAttemptRef.current = attempt + 1;
+        reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay);
       };
 
       ws.onerror = (err) => {
@@ -178,7 +182,6 @@ export default function App() {
 
     connectWebSocket();
 
-    // Clean up
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
@@ -202,6 +205,8 @@ export default function App() {
   const handleJoined = (calendarData, user) => {
     setCalendar(calendarData);
     setUsername(user);
+    localStorage.setItem('cocalendar_code', calendarData.code);
+    localStorage.setItem('cocalendar_user', user);
   };
 
   const handleLeaveCalendar = () => {
@@ -229,10 +234,64 @@ export default function App() {
     });
   };
 
-  const handleImportSuccess = (importResult) => {
+  const handleImportSuccess = (_importResult) => {
     // Reload full calendar
     fetchCalendar(calendar.code, username);
   };
+
+  // Show loading spinner while restoring session
+  if (restoring) {
+    return (
+      <div className="app-phone-container">
+        <div className="loading-screen">
+          <div className="loading-spinner" />
+          <p>Restauration de votre session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error screen if we have saved credentials but can't reach the server
+  if (!calendar && fetchError) {
+    const savedCode = localStorage.getItem('cocalendar_code');
+    const savedUser = localStorage.getItem('cocalendar_user');
+    return (
+      <div className="app-phone-container">
+        <div className="loading-screen">
+          <div className="auth-logo pulse-glow" style={{ marginBottom: '1.5rem' }}>
+            <CalendarIcon size={40} color="white" />
+          </div>
+          <p style={{ color: '#ef4444', marginBottom: '0.5rem', fontWeight: 600, fontSize: '0.95rem' }}>
+            Serveur injoignable
+          </p>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.85rem', textAlign: 'center', maxWidth: 300 }}>
+            {fetchError}. Vérifiez que votre serveur est en ligne.
+          </p>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => { setFetchError(''); fetchCalendar(savedCode, savedUser); }}
+            style={{ marginBottom: '0.75rem' }}
+          >
+            <RefreshCw size={18} />
+            Réessayer
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              localStorage.removeItem('cocalendar_code');
+              localStorage.removeItem('cocalendar_user');
+              setCalendar(null);
+              setFetchError('');
+            }}
+          >
+            Changer de calendrier
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // If not connected to any calendar, show Join/Create Auth screen
   if (!calendar) {

@@ -1,19 +1,28 @@
-import React, { useState } from 'react';
-import { Calendar, Plus, ArrowRight, Globe, ChevronDown, ChevronUp, Check, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Calendar, Plus, ArrowRight, Globe, ChevronDown, ChevronUp, Check, AlertCircle, Wifi } from 'lucide-react';
 import { saveServerUrl, testServerConnection } from '../config/serverUrl';
 import { isNativeApp } from '../utils/platform';
 
 export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onServerOriginChange }) {
-  const [activeTab, setActiveTab] = useState('join'); // 'join' or 'create'
+  const [activeTab, setActiveTab] = useState('join');
   const [username, setUsername] = useState('');
   const [calendarName, setCalendarName] = useState('');
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showServerConfig, setShowServerConfig] = useState(!apiBaseUrl || isNativeApp());
+  const [showServerConfig, setShowServerConfig] = useState(!apiBaseUrl && !serverOrigin);
   const [serverInput, setServerInput] = useState(serverOrigin || '');
-  const [serverStatus, setServerStatus] = useState(null); // 'ok' | 'error' | 'testing'
+  const [serverStatus, setServerStatus] = useState(null);
   const [serverMessage, setServerMessage] = useState('');
+
+  useEffect(() => {
+    if (!serverOrigin && !isNativeApp()) {
+      const { hostname, origin } = window.location;
+      if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1' && !hostname.startsWith('192.168.') && !hostname.startsWith('10.')) {
+        setServerInput(origin);
+      }
+    }
+  }, [serverOrigin]);
 
   const handleSaveServer = async () => {
     setServerStatus('testing');
@@ -29,8 +38,8 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
       onServerOriginChange(normalized);
       setServerInput(normalized);
       setServerStatus('ok');
-      setServerMessage('Serveur connecté — vous pouvez utiliser l\'app partout.');
-      setShowServerConfig(false);
+      setServerMessage('Serveur connecté !');
+      setTimeout(() => setShowServerConfig(false), 1000);
     } catch (err) {
       setServerStatus('error');
       setServerMessage(err.message);
@@ -105,7 +114,6 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
         throw new Error(data.error || 'Erreur lors de la création.');
       }
       
-      // After creating, automatically join it
       const joinResponse = await fetch(`${apiBaseUrl}/api/calendar/${data.code}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -235,9 +243,9 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
           className="server-config-toggle"
           onClick={() => setShowServerConfig(prev => !prev)}
         >
-          <Globe size={16} color="var(--primary)" />
+          {apiBaseUrl ? <Wifi size={16} color="var(--success)" /> : <Globe size={16} color="var(--primary)" />}
           <span>
-            Serveur {apiBaseUrl ? '(connecté)' : isNativeApp() ? '(obligatoire)' : '(requis hors Wi-Fi)'}
+            {apiBaseUrl ? 'Serveur connecté' : 'Configurer le serveur'}
           </span>
           {showServerConfig ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
@@ -246,8 +254,8 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
           <div className="server-config-panel">
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
               {isNativeApp()
-                ? "L'app Android se connecte à votre serveur en ligne pour le compte et le calendrier partagé."
-                : "Pour utiliser l'app en dehors de chez vous, entrez l'adresse de votre serveur en ligne."}
+                ? "Entrez l'adresse de votre serveur en ligne pour synchroniser le calendrier."
+                : "Entrez l'adresse de votre serveur pour utiliser l'app partout (obligatoire une seule fois)."}
             </p>
             <div className="input-group">
               <label htmlFor="server-url">Adresse du serveur</label>
@@ -277,16 +285,16 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
 
             <button
               type="button"
-              className="btn-secondary"
+              className="btn-primary"
               style={{ width: '100%' }}
               onClick={handleSaveServer}
               disabled={serverStatus === 'testing' || !serverInput.trim()}
             >
-              {serverStatus === 'testing' ? 'Test de connexion...' : 'Enregistrer et tester'}
+              {serverStatus === 'testing' ? 'Test de connexion...' : 'Connecter le serveur'}
             </button>
 
             {apiBaseUrl && (
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.75rem' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.75rem', textAlign: 'center' }}>
                 Connecté à : {apiBaseUrl}
               </p>
             )}

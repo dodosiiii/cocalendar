@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Trash2, Calendar as CalendarIcon, Clock, User, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Trash2, Calendar as CalendarIcon, User, X } from 'lucide-react';
 
 const COLORS = [
   '#6366f1', // Indigo
