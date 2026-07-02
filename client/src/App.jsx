@@ -101,18 +101,21 @@ export default function App() {
   }, [API_BASE_URL, fetchCalendar]);
 
   useEffect(() => {
-    if (isNativeApp()) {
-      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-        if (isActive) {
-          const savedCode = localStorage.getItem('cocalendar_code');
-          const savedUser = localStorage.getItem('cocalendar_user');
-          if (savedCode && savedUser && calendar) {
-            fetchCalendar(savedCode, savedUser);
-          }
+    if (!isNativeApp()) return;
+    let handler;
+    CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) {
+        const savedCode = localStorage.getItem('cocalendar_code');
+        const savedUser = localStorage.getItem('cocalendar_user');
+        if (savedCode && savedUser && calendar) {
+          fetchCalendar(savedCode, savedUser);
         }
-      });
-    }
+      }
+    }).then(h => { handler = h; });
+    return () => { handler?.remove(); };
   }, [calendar, fetchCalendar]);
+
+  const VAPID_PUBLIC_KEY = 'BMrRdVqYlDFYjOMZvK6VDFPJ8FS3jDodY_yOZkLDSlVDD1g6OKQYpqewo5EAET12nR7PG_6D5N52N2xqxArQCys';
 
   const registerPush = useCallback(async () => {
     if (pushRegisteredRef.current) return;
@@ -150,8 +153,6 @@ export default function App() {
       }
     } catch {}
   }, [API_BASE_URL]);
-
-  const VAPID_PUBLIC_KEY = 'BMrRdVqYlDFYjOMZvK6VDFPJ8FS3jDodY_yOZkLDSlVDD1g6OKQYpqewo5EAET12nR7PG_6D5N52N2xqxArQCys';
 
   useEffect(() => {
     if (calendar && !pushRegisteredRef.current) registerPush();

@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Share2, Users, Upload, Download, Check, AlertCircle, LogOut, Globe, Smartphone, HardDrive, RefreshCw } from 'lucide-react';
+import { Share2, Users, Upload, Download, Check, AlertCircle, LogOut, Globe, Smartphone, HardDrive, RefreshCw, ExternalLink } from 'lucide-react';
 import { parseIcs } from '../utils/IcsParser';
 import { shouldShowIosInstallHint, isNativeApp } from '../utils/platform';
 
@@ -228,7 +228,7 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
           {fileName ? (
             <div><p style={{ color: 'var(--text-main)', fontWeight: 600 }}>{fileName}</p><p style={{ fontSize: '0.75rem' }}>Cliquez pour changer</p></div>
           ) : (
-            <div><p style={{ color: 'var(--text-main)', fontWeight: 500 }}>Choisir un fichier .ics</p><p style={{ fontSize: '0.75rem' }}>Maximum 5 Mo</p></div>
+            <div><p style={{ color: 'var(--text-main)', fontWeight: 500 }}>Choisir un fichier .ics</p><p style={{ fontSize: '0.75rem' }}>Maximum 500 Ko</p></div>
           )}
         </div>
 
@@ -242,7 +242,7 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
           <div style={{ marginTop: '0.75rem' }}>
             <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Aperçu ({importedEvents.length}) :</p>
             <div className="import-preview-list">
-              {importedEvents.map((evt, i) => (
+              {importedEvents.slice(0, 50).map((evt, i) => (
                 <div key={i} className="import-preview-item">
                   <span className="import-preview-title">{evt.title}</span>
                   <span className="import-preview-date">{evt.date} à {evt.start}</span>
@@ -254,6 +254,18 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
             </button>
           </div>
         )}
+      </div>
+
+      <div className="settings-card" style={{ borderColor: 'rgba(99, 102, 241, 0.2)' }}>
+        <h4><ExternalLink size={18} color="var(--primary)" /> Code source</h4>
+        <a
+          href="https://github.com/dodosiiii/cocalendar"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontSize: '0.85rem', color: 'var(--primary)', wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+        >
+          github.com/dodosiiii/cocalendar <ExternalLink size={14} />
+        </a>
       </div>
 
       <button type="button" className="btn-secondary"

@@ -25,7 +25,6 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const clients = new Map();
-let audioContext = null;
 
 function readData() {
   try {
