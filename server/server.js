@@ -137,10 +137,10 @@ const authLimiter = rateLimit({ windowMs: 60000, max: 10, message: { error: 'Tro
 
 app.use('/api/', generalLimiter);
 
-function getCalendarSafe(code) {
+function getCalendarWithData(code) {
   const data = readData();
   const cal = data.calendars?.[code.toUpperCase()];
-  return cal || null;
+  return cal ? { data, cal } : null;
 }
 
 app.get('/api/health', (req, res) => {
@@ -190,12 +190,13 @@ app.post('/api/calendar/:code/join', (req, res) => {
   const username = sanitize(req.body.username, 15);
   if (!username) return res.status(400).json({ error: 'Pseudo requis.' });
 
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
 
   if (!cal.members.includes(username)) {
     cal.members.push(username);
-    writeData(readData());
+    writeData(data);
 
     broadcastToCalendar(cal.code, {
       type: 'notification',
@@ -215,14 +216,15 @@ app.post('/api/calendar/:code/join', (req, res) => {
 });
 
 app.get('/api/calendar/:code', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
-  res.json(cal);
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  res.json(result.cal);
 });
 
 app.post('/api/calendar/:code/event', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
 
   const ev = req.body.event || {};
   const title = sanitize(ev.title, 40);
@@ -248,7 +250,7 @@ app.post('/api/calendar/:code/event', (req, res) => {
   };
 
   cal.events.push(newEvent);
-  writeData(readData());
+  writeData(data);
 
   const msg = `${creator} a ajouté "${title}" à ${start}.`;
   broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
@@ -259,8 +261,9 @@ app.post('/api/calendar/:code/event', (req, res) => {
 });
 
 app.put('/api/calendar/:code/event/:id', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
 
   const evIdx = cal.events.findIndex(e => e.id === req.params.id);
   if (evIdx === -1) return res.status(404).json({ error: 'Événement introuvable.' });
@@ -279,7 +282,7 @@ app.put('/api/calendar/:code/event/:id', (req, res) => {
   if (end && !isValidTime(end)) return res.status(400).json({ error: 'Format heure de fin invalide.' });
 
   cal.events[evIdx] = { ...existing, title, date, start, end, description, color, updatedAt: new Date().toISOString() };
-  writeData(readData());
+  writeData(data);
 
   const msg = `${existing.creator} a modifié "${title}".`;
   broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
@@ -289,8 +292,9 @@ app.put('/api/calendar/:code/event/:id', (req, res) => {
 });
 
 app.delete('/api/calendar/:code/event/:id', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
 
   const username = sanitize(req.query.username, 15);
   if (!username) return res.status(400).json({ error: 'Username requis.' });
@@ -301,7 +305,7 @@ app.delete('/api/calendar/:code/event/:id', (req, res) => {
 
   const deleted = cal.events[evIdx];
   cal.events.splice(evIdx, 1);
-  writeData(readData());
+  writeData(data);
 
   const msg = `${username} a annulé "${deleted.title}".`;
   broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
@@ -312,8 +316,9 @@ app.delete('/api/calendar/:code/event/:id', (req, res) => {
 });
 
 app.delete('/api/calendar/:code/member/:username', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
 
   const username = sanitize(req.params.username, 15);
   const idx = cal.members.indexOf(username);
@@ -322,12 +327,9 @@ app.delete('/api/calendar/:code/member/:username', (req, res) => {
   cal.members.splice(idx, 1);
 
   if (cal.members.length === 0) {
-    const data = readData();
     delete data.calendars[cal.code];
-    writeData(data);
-  } else {
-    writeData(readData());
   }
+  writeData(data);
 
   broadcastToCalendar(cal.code, {
     type: 'notification',
@@ -338,8 +340,9 @@ app.delete('/api/calendar/:code/member/:username', (req, res) => {
 });
 
 app.post('/api/calendar/:code/import', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
 
   const events = req.body.events;
   const username = sanitize(req.body.username, 15);
@@ -363,7 +366,7 @@ app.post('/api/calendar/:code/import', (req, res) => {
   if (!imported.length) return res.status(400).json({ error: 'Aucun événement valide à importer.' });
 
   cal.events.push(...imported);
-  writeData(readData());
+  writeData(data);
 
   const msg = `${username} a importé ${imported.length} événement(s).`;
   broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
@@ -374,8 +377,9 @@ app.post('/api/calendar/:code/import', (req, res) => {
 });
 
 app.get('/api/calendar/:code/export', (req, res) => {
-  const cal = getCalendarSafe(req.params.code);
-  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { cal } = result;
 
   const format = req.query.format || 'ics';
 
@@ -413,6 +417,41 @@ app.get('/api/calendar/:code/export', (req, res) => {
   res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${cal.code}.ics"`);
   res.send(ics.join('\r\n'));
+});
+
+app.post('/api/calendar/:code/restore', (req, res) => {
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { data, cal } = result;
+
+  const backup = req.body;
+  if (!backup || !backup.events || !Array.isArray(backup.events)) {
+    return res.status(400).json({ error: 'Sauvegarde invalide.' });
+  }
+
+  const username = sanitize(req.body.restoredBy, 15) || 'Sauvegarde';
+  if (!cal.members.includes(username)) cal.members.push(username);
+
+  cal.events = backup.events.slice(0, 5000).map(e => ({
+    id: crypto.randomUUID(),
+    title: sanitize(e.title || e.titre, 40) || 'Événement',
+    date: isValidDate(e.date) ? e.date : '2026-01-01',
+    start: isValidTime(e.start) ? e.start : '12:00',
+    end: e.end && isValidTime(e.end) ? e.end : '',
+    description: sanitize(e.description || e.desc, 150),
+    creator: sanitize(e.creator || username, 15),
+    color: /^#[0-9a-f]{6}$/i.test(e.color || '') ? e.color : '#6366f1',
+    createdAt: new Date().toISOString()
+  }));
+  writeData(data);
+
+  broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
+  broadcastToCalendar(cal.code, {
+    type: 'notification',
+    notification: { id: crypto.randomUUID(), type: 'import', message: `${cal.events.length} événements restaurés depuis une sauvegarde.`, timestamp: new Date().toISOString() }
+  });
+
+  res.json({ success: true, count: cal.events.length });
 });
 
 app.use((err, _req, res, _next) => {

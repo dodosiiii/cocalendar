@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Share2, Users, Upload, Check, AlertCircle, LogOut, Globe, Smartphone } from 'lucide-react';
+import { Share2, Users, Upload, Download, Check, AlertCircle, LogOut, Globe, Smartphone, HardDrive, RefreshCw } from 'lucide-react';
 import { parseIcs } from '../utils/IcsParser';
 import { shouldShowIosInstallHint, isNativeApp } from '../utils/platform';
 
@@ -8,13 +8,68 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
   const [importedEvents, setImportedEvents] = useState([]);
   const [fileName, setFileName] = useState('');
   const [importing, setImporting] = useState(false);
+  const [backupStatus, setBackupStatus] = useState('');
+  const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState('');
   const fileInputRef = useRef(null);
+  const restoreInputRef = useRef(null);
 
   const copyCode = () => {
     navigator.clipboard.writeText(calendar.code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleBackup = () => {
+    try {
+      const data = { code: calendar.code, name: calendar.name, events: calendar.events, savedAt: new Date().toISOString() };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CoCalendar-${calendar.code}-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setBackupStatus('ok');
+      setTimeout(() => setBackupStatus(''), 3000);
+    } catch {
+      setBackupStatus('error');
+    }
+  };
+
+  const triggerRestoreSelect = () => restoreInputRef.current?.click();
+
+  const handleRestoreFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setRestoring(true);
+    setError('');
+
+    try {
+      const text = await file.text();
+      const backup = JSON.parse(text);
+      if (!backup.events || !Array.isArray(backup.events)) throw new Error('Fichier de sauvegarde invalide.');
+
+      if (!window.confirm(`Restaurer ${backup.events.length} événements dans "${calendar.name}" ? Cela remplacera tous les événements actuels.`)) return;
+
+      const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: backup.events, restoredBy: username })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erreur de restauration');
+
+      alert(`${data.count} événements restaurés !`);
+      onImportSuccess(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRestoring(false);
+      if (restoreInputRef.current) restoreInputRef.current.value = '';
+    }
   };
 
   const handleFileChange = (e) => {
@@ -27,44 +82,38 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const text = event.target.result;
-        const parsed = parseIcs(text);
-        
+        const parsed = parseIcs(event.target.result);
         if (parsed.length === 0) {
-          setError("Aucun événement valide n'a pu être extrait de ce fichier ICS.");
+          setError("Aucun événement valide extrait.");
           setImportedEvents([]);
         } else {
           setImportedEvents(parsed);
         }
       } catch (err) {
-        setError("Erreur lors de la lecture du fichier ICS: " + err.message);
+        setError("Erreur de lecture: " + err.message);
         setImportedEvents([]);
       }
     };
     reader.readAsText(file);
   };
 
-  const triggerFileSelect = () => {
-    fileInputRef.current.click();
-  };
+  const triggerFileSelect = () => fileInputRef.current?.click();
 
   const handleImportSubmit = async () => {
-    if (importedEvents.length === 0) return;
-
+    if (!importedEvents.length) return;
     setImporting(true);
     setError('');
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/import`, {
+      const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: importedEvents, username })
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur d'importation");
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Erreur d'importation");
-
-      alert(`${importedEvents.length} événements importés avec succès !`);
+      alert(`${importedEvents.length} événements importés !`);
       onImportSuccess(data);
       setImportedEvents([]);
       setFileName('');
@@ -78,9 +127,9 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
 
   const handleExport = async () => {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/export?format=ics`);
-      if (!response.ok) throw new Error("Erreur d'export");
-      const blob = await response.blob();
+      const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/export?format=ics`);
+      if (!res.ok) throw new Error("Erreur d'export");
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -98,176 +147,119 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
     <div className="settings-container">
       {shouldShowIosInstallHint() && (
         <div className="settings-card">
-          <h4>
-            <Smartphone size={18} color="var(--secondary)" />
-            Installer sur iPhone
-          </h4>
+          <h4><Smartphone size={18} color="var(--secondary)" /> Installer sur iPhone</h4>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            Ouvrez cette page dans <strong>Safari</strong>, touchez le bouton <strong>Partager</strong>,
-            puis choisissez <strong>Sur l'écran d'accueil</strong>. L'app se connectera au serveur
-            pour votre compte et votre calendrier.
+            Ouvrez dans <strong>Safari</strong>, touchez <strong>Partager</strong> → <strong>Sur l'écran d'accueil</strong>.
           </p>
         </div>
       )}
 
       {isNativeApp() && serverOrigin && (
         <div className="settings-card">
-          <h4>
-            <Smartphone size={18} color="var(--success)" />
-            Application Android
-          </h4>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Connectée au serveur pour la synchronisation du calendrier en temps réel.
-          </p>
+          <h4><Smartphone size={18} color="var(--success)" /> Application Android</h4>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Connectée au serveur pour la synchronisation.</p>
         </div>
       )}
 
-      {/* Server Info */}
       {serverOrigin && (
         <div className="settings-card">
-          <h4>
-            <Globe size={18} color="var(--primary)" />
-            Serveur connecté
-          </h4>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', wordBreak: 'break-all' }}>
-            {serverOrigin}
-          </p>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
-            L'app fonctionne partout tant que ce serveur est en ligne.
-          </p>
+          <h4><Globe size={18} color="var(--primary)" /> Serveur</h4>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{serverOrigin}</p>
         </div>
       )}
 
-      {/* Code Sharing Card */}
       <div className="settings-card">
-        <h4>
-          <Share2 size={18} color="var(--primary)" />
-          Partager le Calendrier
-        </h4>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Donnez ce code aux personnes avec qui vous souhaitez partager votre calendrier.
-        </p>
+        <h4><Share2 size={18} color="var(--primary)" /> Partager</h4>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Donnez ce code pour inviter :</p>
         <div className="calendar-code-box">
           <span className="calendar-code-text">{calendar.code}</span>
           <button type="button" className="btn-copy" onClick={copyCode}>
-            {copied ? <Check size={14} /> : null}
-            {copied ? 'Copié !' : 'Copier'}
+            {copied ? <Check size={14} /> : null} {copied ? 'Copié !' : 'Copier'}
           </button>
         </div>
       </div>
 
-      {/* Members List */}
       <div className="settings-card">
-        <h4>
-          <Users size={18} color="var(--secondary)" />
-          Membres du Calendrier ({calendar.members ? calendar.members.length : 0})
-        </h4>
+        <h4><Users size={18} color="var(--secondary)" /> Membres ({calendar.members?.length || 0})</h4>
         <div className="member-list">
-          {calendar.members && calendar.members.map((member, idx) => (
+          {calendar.members?.map((member, idx) => (
             <div key={idx} className="member-item">
-              <div className="member-avatar">
-                {member.substring(0, 2).toUpperCase()}
-              </div>
-              <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>
-                {member} {member === username ? '(vous)' : ''}
-              </span>
+              <div className="member-avatar">{member.substring(0, 2).toUpperCase()}</div>
+              <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{member} {member === username ? '(vous)' : ''}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Export */}
-      <div className="settings-card">
-        <h4>
-          <Share2 size={18} color="var(--primary)" />
-          Exporter le Calendrier
-        </h4>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Téléchargez vos événements au format ICS pour les importer ailleurs.
+      <div className="settings-card" style={{ borderColor: 'rgba(16, 185, 129, 0.3)' }}>
+        <h4><HardDrive size={18} color="#10b981" /> Sauvegarde locale</h4>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+          Sauvegardez votre calendrier sur votre appareil pour le restaurer en cas de problème.
         </p>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button type="button" className="btn-secondary" style={{ flex: 1, gap: '0.35rem' }} onClick={handleBackup}>
+            <Download size={16} /> Sauvegarder
+          </button>
+          <button type="button" className="btn-secondary" style={{ flex: 1, gap: '0.35rem', borderColor: 'rgba(245, 158, 11, 0.3)' }} onClick={triggerRestoreSelect} disabled={restoring}>
+            {restoring ? <><RefreshCw size={16} className="spin" /> Restauration...</> : <><Upload size={16} /> Restaurer</>}
+          </button>
+        </div>
+        {backupStatus === 'ok' && <p style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.5rem' }}>Sauvegarde téléchargée ✓</p>}
+        {backupStatus === 'error' && <p style={{ fontSize: '0.75rem', color: '#ef4444', marginTop: '0.5rem' }}>Erreur de sauvegarde</p>}
+        <input type="file" ref={restoreInputRef} style={{ display: 'none' }} accept=".json" onChange={handleRestoreFile} />
+      </div>
+
+      <div className="settings-card">
+        <h4><Share2 size={18} color="var(--primary)" /> Exporter</h4>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Format ICS pour vos autres calendriers.</p>
         <button type="button" className="btn-secondary" style={{ width: '100%' }} onClick={handleExport}>
-          <Upload size={16} /> Télécharger .ics
+          <Download size={16} /> Télécharger .ics
         </button>
       </div>
 
-      {/* ICS Import */}
       <div className="settings-card">
-        <h4>
-          <Upload size={18} color="var(--success)" />
-          Importer un Calendrier (.ics)
-        </h4>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Importez vos événements existants au format iCalendar standard.
-        </p>
+        <h4><Upload size={18} color="#10b981" /> Importer .ics</h4>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Importez depuis un autre calendrier.</p>
 
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          style={{ display: 'none' }} 
-          accept=".ics"
-          onChange={handleFileChange}
-        />
+        <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".ics" onChange={handleFileChange} />
 
         <div className="file-dropzone" onClick={triggerFileSelect}>
-          <Upload size={32} color="var(--text-dim)" />
+          <Upload size={28} color="var(--text-dim)" />
           {fileName ? (
-            <div>
-              <p style={{ color: 'var(--text-main)', fontWeight: 600 }}>{fileName}</p>
-              <p style={{ fontSize: '0.75rem' }}>Cliquez pour changer de fichier</p>
-            </div>
+            <div><p style={{ color: 'var(--text-main)', fontWeight: 600 }}>{fileName}</p><p style={{ fontSize: '0.75rem' }}>Cliquez pour changer</p></div>
           ) : (
-            <div>
-              <p style={{ color: 'var(--text-main)', fontWeight: 500 }}>Sélectionnez un fichier .ics</p>
-              <p style={{ fontSize: '0.75rem' }}>Taille max conseillée : 5 Mo</p>
-            </div>
+            <div><p style={{ color: 'var(--text-main)', fontWeight: 500 }}>Choisir un fichier .ics</p><p style={{ fontSize: '0.75rem' }}>Maximum 5 Mo</p></div>
           )}
         </div>
 
         {error && (
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '1rem', color: 'var(--danger)', fontSize: '0.8rem' }}>
-            <AlertCircle size={16} />
-            <span>{error}</span>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.75rem', color: 'var(--danger)', fontSize: '0.8rem' }}>
+            <AlertCircle size={16} /><span>{error}</span>
           </div>
         )}
 
         {importedEvents.length > 0 && (
-          <div style={{ marginTop: '1rem' }}>
-            <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-              Aperçu des événements ({importedEvents.length}) :
-            </p>
+          <div style={{ marginTop: '0.75rem' }}>
+            <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Aperçu ({importedEvents.length}) :</p>
             <div className="import-preview-list">
-              {importedEvents.map((evt, index) => (
-                <div key={index} className="import-preview-item">
+              {importedEvents.map((evt, i) => (
+                <div key={i} className="import-preview-item">
                   <span className="import-preview-title">{evt.title}</span>
-                  <span className="import-preview-date">
-                    {evt.date} à {evt.start}
-                  </span>
+                  <span className="import-preview-date">{evt.date} à {evt.start}</span>
                 </div>
               ))}
             </div>
-            
-            <button 
-              type="button" 
-              className="btn-primary" 
-              style={{ width: '100%', marginTop: '1rem' }}
-              onClick={handleImportSubmit}
-              disabled={importing}
-            >
-              {importing ? 'Importation en cours...' : `Confirmer l'importation de ${importedEvents.length} événements`}
+            <button type="button" className="btn-primary" style={{ width: '100%', marginTop: '0.75rem' }} onClick={handleImportSubmit} disabled={importing}>
+              {importing ? 'Importation...' : `Importer ${importedEvents.length} événements`}
             </button>
           </div>
         )}
       </div>
 
-      {/* Leave Calendar Button */}
-      <button 
-        type="button" 
-        className="btn-secondary" 
-        style={{ color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginTop: '0.5rem' }}
-        onClick={onLeave}
-      >
-        <LogOut size={16} />
-        Quitter le calendrier
+      <button type="button" className="btn-secondary"
+        style={{ color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+        onClick={onLeave}>
+        <LogOut size={16} /> Quitter le calendrier
       </button>
     </div>
   );
