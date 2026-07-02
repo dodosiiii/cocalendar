@@ -1175,6 +1175,212 @@ html.native-app body {
   100% { box-shadow: 0 0 25px rgba(99, 102, 241, 0.6); }
 }
 
+/* Year/Month Picker Dropdown */
+.year-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1a24;
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+  padding: 1rem;
+  z-index: 50;
+  min-width: 220px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+  margin-top: 0.5rem;
+}
+
+.year-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.year-picker-btn {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  padding: 0.4rem 0.3rem;
+  border-radius: 8px;
+  font-family: var(--font-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  text-align: center;
+}
+
+.year-picker-btn:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+.year-picker-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.month-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.35rem;
+}
+
+.month-btn {
+  font-size: 0.75rem;
+  padding: 0.35rem 0.2rem;
+}
+
+/* Week View */
+.week-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.week-day-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  font-family: var(--font-primary);
+  color: var(--text-main);
+  text-align: left;
+  width: 100%;
+}
+
+.week-day-row.today {
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.week-day-row.selected {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: var(--primary);
+}
+
+.week-day-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.week-day-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 36px;
+  flex-shrink: 0;
+}
+
+.week-day-name {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.week-day-num {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.week-day-events {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  overflow: hidden;
+}
+
+.week-day-event-dot {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.week-day-empty {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* Search Bar */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.search-input {
+  background: none;
+  border: none;
+  color: var(--text-main);
+  font-family: var(--font-primary);
+  font-size: 0.85rem;
+  outline: none;
+  flex: 1;
+}
+
+.search-input::placeholder {
+  color: var(--text-dim);
+}
+
+/* Recurrence Badge */
+.rec-badge {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: #818cf8;
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  margin-left: 0.35rem;
+  white-space: nowrap;
+}
+
+/* Delete animation */
+.event-card.deleting {
+  animation: slideOut 0.25s ease forwards;
+}
+
+@keyframes slideOut {
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+    height: 0;
+    margin-bottom: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+}
+
+/* SlideIn animation (existing) */
+@keyframes slideIn {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 /* Mobile improvements */
 @media (max-width: 480px) {
   .app-header {
