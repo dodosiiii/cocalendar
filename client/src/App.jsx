@@ -1,12 +1,21 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Calendar as CalendarIcon, Settings, Bell, X, RefreshCw } from 'lucide-react';
+import { PushNotifications } from '@capacitor/push-notifications';
+import { App as CapacitorApp } from '@capacitor/app';
 import JoinCreateView from './components/JoinCreateView';
 import CalendarView from './components/CalendarView';
 import SettingsView from './components/SettingsView';
 import IosInstallBanner from './components/IosInstallBanner';
 import { getApiBaseUrl, getWsBaseUrl, resolveServerOrigin } from './config/serverUrl';
-import { shouldShowIosInstallHint } from './utils/platform';
+import { shouldShowIosInstallHint, isNativeApp } from './utils/platform';
 import './App.css';
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map(ch => ch.charCodeAt(0)));
+}
 
 export default function App() {
   const [serverOrigin, setServerOrigin] = useState(() => resolveServerOrigin());
@@ -105,10 +114,64 @@ export default function App() {
     }
   };
 
-  // Request browser notification permissions on first load or first socket connection
+  const registerPush = useCallback(async () => {
+    if (isNativeApp()) {
+      try {
+        const perm = await PushNotifications.requestPermissions();
+        if (perm.receive === 'granted') {
+          await PushNotifications.register();
+          PushNotifications.addListener('pushNotificationReceived', (n) => {
+            addNotificationToast(n.title, n.body || '');
+          });
+          PushNotifications.addListener('pushNotificationActionPerformed', () => {});
+        }
+      } catch {}
+    } else if ('serviceWorker' in navigator && 'PushManager' in window) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array('BMrRdVqYlDFYjOMZvK6VDFPJ8FS3jDodY_yOZkLDSlVDD1g6OKQYpqewo5EAET12nR7PG_6D5N52N2xqxArQCys')
+          });
+        }
+        await fetch(`${API_BASE_URL}/api/push/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: sub.toJSON() })
+        });
+      } catch {}
+    }
+  }, [API_BASE_URL]);
+
+  const addNotificationToast = (title, body) => {
+    const id = Math.random().toString(36).substring(2);
+    const message = body || title;
+    setNotifications(prev => [...prev, { id, type: 'add', message }]);
+    playNotificationSound();
+    if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]);
+    setTimeout(() => removeNotification(id), 4000);
+  };
+
   useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
+    if (calendar) {
+      registerPush();
+    }
+  }, [calendar, registerPush]);
+
+  useEffect(() => {
+    if (isNativeApp()) {
+      const handler = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) {
+          const savedCode = localStorage.getItem('cocalendar_code');
+          const savedUser = localStorage.getItem('cocalendar_user');
+          if (savedCode && savedUser && calendar) {
+            fetchCalendar(savedCode, savedUser);
+          }
+        }
+      });
+      return () => { handler.then(h => h.remove()); };
     }
   }, [calendar]);
 

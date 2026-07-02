@@ -5,22 +5,22 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import webPush from 'web-push';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_FILE = path.join(__dirname, 'data.json');
+const PUSH_FILE = path.join(__dirname, 'pushSubscriptions.json');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-// Store active WebSocket connections: ws -> { code, username }
 const clients = new Map();
 
-// Helper to read database
 function readData() {
   try {
     if (fs.existsSync(DATA_FILE)) {
@@ -33,12 +33,62 @@ function readData() {
   return { calendars: {} };
 }
 
-// Helper to write database
 function writeData(data) {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
   } catch (error) {
     console.error('Error writing data.json:', error);
+  }
+}
+
+function readPushSubs() {
+  try {
+    if (fs.existsSync(PUSH_FILE)) {
+      return JSON.parse(fs.readFileSync(PUSH_FILE, 'utf8') || '{}');
+    }
+  } catch (error) {
+    console.error('Error reading push subscriptions:', error);
+  }
+  return { web: [], fcm: [] };
+}
+
+function writePushSubs(data) {
+  try {
+    fs.writeFileSync(PUSH_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Error writing push subscriptions:', error);
+  }
+}
+
+// Setup VAPID keys for Web Push
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BMrRdVqYlDFYjOMZvK6VDFPJ8FS3jDodY_yOZkLDSlVDD1g6OKQYpqewo5EAET12nR7PG_6D5N52N2xqxArQCys';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '7UPkPqfUw74Pk8dOX1VqjX7RkAfDB_B9gBpQBBAMWxI';
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webPush.setVapidDetails('mailto:contact@cocalendar.app', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
+
+async function sendPushToCalendar(code, title, body) {
+  const subs = readPushSubs();
+  if (!subs.web.length) return;
+
+  const payload = JSON.stringify({ title, body, url: '/' });
+  const results = await Promise.allSettled(
+    subs.web.map(async (sub) => {
+      try {
+        await webPush.sendNotification(sub, payload);
+      } catch (err) {
+        if (err.statusCode === 410 || err.statusCode === 404) {
+          return false;
+        }
+        throw err;
+      }
+    })
+  );
+
+  const valid = subs.web.filter((_, i) => results[i].value !== false);
+  if (valid.length !== subs.web.length) {
+    writePushSubs({ ...subs, web: valid });
   }
 }
 
@@ -73,7 +123,24 @@ function broadcastToCalendar(code, message, senderWs = null) {
 // --- REST API Endpoints ---
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), vapid: !!VAPID_PUBLIC_KEY });
+});
+
+app.post('/api/push/register', (req, res) => {
+  const { subscription, token, platform } = req.body;
+  const subs = readPushSubs();
+
+  if (subscription) {
+    const exists = subs.web.some(s => JSON.stringify(s) === JSON.stringify(subscription));
+    if (!exists) subs.web.push(subscription);
+  }
+  if (token && platform === 'fcm') {
+    const exists = subs.fcm.some(t => t.token === token);
+    if (!exists) subs.fcm.push({ token, platform: 'android', createdAt: new Date().toISOString() });
+  }
+
+  writePushSubs(subs);
+  res.json({ success: true, count: subs.web.length + subs.fcm.length });
 });
 
 // Create a new calendar
@@ -188,21 +255,23 @@ app.post('/api/calendar/:code/event', (req, res) => {
   calendar.events.push(newEvent);
   writeData(data);
 
-  // Broadcast sync and notification
   broadcastToCalendar(cleanCode, {
     type: 'sync',
     events: calendar.events
   });
 
+  const notifMsg = `${event.creator} a ajouté "${event.title}" à ${event.start}.`;
   broadcastToCalendar(cleanCode, {
     type: 'notification',
     notification: {
       id: Math.random().toString(),
       type: 'add',
-      message: `${event.creator} a ajouté l'événement "${event.title}" à ${event.start}.`,
+      message: notifMsg,
       timestamp: new Date().toISOString()
     }
   });
+
+  sendPushToCalendar(cleanCode, 'CoCalendar - Nouvel événement', notifMsg);
 
   res.json(newEvent);
 });
@@ -233,21 +302,23 @@ app.delete('/api/calendar/:code/event/:id', (req, res) => {
   calendar.events.splice(eventIndex, 1);
   writeData(data);
 
-  // Broadcast sync and notification
   broadcastToCalendar(cleanCode, {
     type: 'sync',
     events: calendar.events
   });
 
+  const notifMsg = `${username} a annulé "${deletedEvent.title}".`;
   broadcastToCalendar(cleanCode, {
     type: 'notification',
     notification: {
       id: Math.random().toString(),
       type: 'delete',
-      message: `${username} a annulé l'événement "${deletedEvent.title}".`,
+      message: notifMsg,
       timestamp: new Date().toISOString()
     }
   });
+
+  sendPushToCalendar(cleanCode, 'CoCalendar - Événement annulé', notifMsg);
 
   res.json({ success: true, id });
 });
@@ -285,21 +356,23 @@ app.post('/api/calendar/:code/import', (req, res) => {
   calendar.events.push(...importedEvents);
   writeData(data);
 
-  // Broadcast sync and notification
   broadcastToCalendar(cleanCode, {
     type: 'sync',
     events: calendar.events
   });
 
+  const notifMsg = `${username} a importé ${importedEvents.length} événement(s).`;
   broadcastToCalendar(cleanCode, {
     type: 'notification',
     notification: {
       id: Math.random().toString(),
       type: 'import',
-      message: `${username} a importé ${importedEvents.length} événement(s) dans le calendrier.`,
+      message: notifMsg,
       timestamp: new Date().toISOString()
     }
   });
+
+  sendPushToCalendar(cleanCode, 'CoCalendar - Import', notifMsg);
 
   res.json({ success: true, count: importedEvents.length });
 });

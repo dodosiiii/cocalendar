@@ -1,65 +1,47 @@
-// Service Worker - CoCalendar PWA
-// Provides offline caching and enables "Add to Home Screen"
+const CACHE_NAME = 'cocalendar-v3';
+const PRECACHE_URLS = ['/', '/index.html'];
 
-const CACHE_NAME = 'cocalendar-v2';
-const PRECACHE_URLS = [
-  '/',
-  '/index.html',
-];
-
-// Install — precache essential resources
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
   self.skipWaiting();
 });
 
-// Activate — clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => caches.delete(name))
-      );
-    })
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    )
   );
   self.clients.claim();
 });
 
-// Fetch — network-first strategy (always try network, fall back to cache)
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-
-  // Never cache API calls, WebSockets, or cross-origin requests
-  if (
-    url.pathname.startsWith('/api/') ||
-    url.protocol === 'ws:' ||
-    url.protocol === 'wss:' ||
-    (self.location.origin !== url.origin)
-  ) {
-    return;
-  }
-
+  if (url.pathname.startsWith('/api/') || url.protocol === 'ws:' || url.protocol === 'wss:' || self.location.origin !== url.origin) return;
   event.respondWith(
     fetch(event.request)
-      .then((response) => {
-        // Clone the response and put it in cache
-        const responseClone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseClone);
-        });
-        return response;
-      })
-      .catch(() => {
-        // If network fails, serve from cache
-        return caches.match(event.request).then((cachedResponse) => {
-          return cachedResponse || caches.match('/index.html');
-        });
-      })
+      .then((r) => { caches.open(CACHE_NAME).then((c) => c.put(event.request, r.clone())); return r; })
+      .catch(() => caches.match(event.request).then((r) => r || caches.match('/index.html')))
   );
+});
+
+self.addEventListener('push', (event) => {
+  let data = { title: 'CoCalendar', body: 'Nouvelle activité sur le calendrier' };
+  try { data = event.data.json(); } catch {}
+  const options = {
+    body: data.body,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    vibrate: [100, 50, 100],
+    data: { url: data.url || '/' }
+  };
+  event.waitUntil(self.registration.showNotification(data.title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil(clients.openWindow(url));
 });
