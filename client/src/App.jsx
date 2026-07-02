@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Calendar as CalendarIcon, Settings, Bell, X, RefreshCw } from 'lucide-react';
-import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapacitorApp } from '@capacitor/app';
+// import { PushNotifications } from '@capacitor/push-notifications'; // uncomment when Firebase is set up
 import JoinCreateView from './components/JoinCreateView';
 import CalendarView from './components/CalendarView';
 import SettingsView from './components/SettingsView';
@@ -120,14 +120,19 @@ export default function App() {
 
     try {
       if (isNativeApp()) {
-        const perm = await PushNotifications.requestPermissions();
-        if (perm.receive === 'granted') {
-          await PushNotifications.register();
-          PushNotifications.addListener('pushNotificationReceived', (n) => {
-            setNotifications(prev => [...prev, { id: Math.random().toString(36).substring(2), type: 'add', message: n.body || n.title || '' }]);
-            playNotificationSound();
-          });
-        }
+        // Native push (Firebase) requires google-services.json in android/app/
+        // Skipped by default to avoid native crash. To enable:
+        // 1. Create Firebase project, download google-services.json
+        // 2. Place in client/android/app/
+        // 3. Uncomment below and rebuild
+        // const perm = await PushNotifications.requestPermissions();
+        // if (perm.receive === 'granted') {
+        //   await PushNotifications.register();
+        //   PushNotifications.addListener('pushNotificationReceived', (n) => {
+        //     setNotifications(prev => [...prev, { id: Math.random().toString(36).substring(2), type: 'add', message: n.body || n.title || '' }]);
+        //     playNotificationSound();
+        //   });
+        // }
       } else if ('serviceWorker' in navigator && 'PushManager' in window && VAPID_PUBLIC_KEY) {
         const reg = await navigator.serviceWorker.ready;
         let sub = await reg.pushManager.getSubscription();
