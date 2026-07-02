@@ -508,6 +508,11 @@ if (fs.existsSync(clientDistPath)) {
   });
 }
 
+if (!fs.existsSync(DATA_FILE)) {
+  writeData({ calendars: {} });
+  console.log('Initialized empty data.json');
+}
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);

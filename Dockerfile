@@ -18,6 +18,8 @@ COPY --from=build /app/server /app/server
 COPY --from=build /app/client/dist /app/client/dist
 COPY --from=build /app/server/node_modules /app/server/node_modules
 
+RUN chown -R appuser:appgroup /app/server
+
 ENV NODE_ENV=production
 EXPOSE 3001
 
