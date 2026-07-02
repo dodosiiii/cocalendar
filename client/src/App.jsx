@@ -154,7 +154,7 @@ export default function App() {
 
   const showSystemNotification = (message) => {
     if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification('CoCalendar', { body: message, icon: '/icons/icon-192.png' });
+      new Notification('CoCalendar', { body: message, icon: '/favicon.svg' });
     }
   };
 
