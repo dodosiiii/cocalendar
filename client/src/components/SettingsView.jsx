@@ -58,21 +58,14 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
       const response = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          events: importedEvents,
-          username: username
-        })
+        body: JSON.stringify({ events: importedEvents, username })
       });
 
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Erreur d'importation");
 
       alert(`${importedEvents.length} événements importés avec succès !`);
-      
-      // Update calendar events locally (triggers reload)
       onImportSuccess(data);
-      
-      // Reset Import UI
       setImportedEvents([]);
       setFileName('');
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -80,6 +73,24 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
       setError(err.message);
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/export?format=ics`);
+      if (!response.ok) throw new Error("Erreur d'export");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${calendar.code}.ics`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Erreur d'export: " + err.message);
     }
   };
 
@@ -163,6 +174,20 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Export */}
+      <div className="settings-card">
+        <h4>
+          <Share2 size={18} color="var(--primary)" />
+          Exporter le Calendrier
+        </h4>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+          Téléchargez vos événements au format ICS pour les importer ailleurs.
+        </p>
+        <button type="button" className="btn-secondary" style={{ width: '100%' }} onClick={handleExport}>
+          <Upload size={16} /> Télécharger .ics
+        </button>
       </div>
 
       {/* ICS Import */}

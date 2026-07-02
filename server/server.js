@@ -1,11 +1,15 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import webPush from 'web-push';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,19 +17,20 @@ const DATA_FILE = path.join(__dirname, 'data.json');
 const PUSH_FILE = path.join(__dirname, 'pushSubscriptions.json');
 
 const app = express();
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '500kb' }));
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const clients = new Map();
+let audioContext = null;
 
 function readData() {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      const content = fs.readFileSync(DATA_FILE, 'utf8');
-      return JSON.parse(content || '{}');
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '{}');
     }
   } catch (error) {
     console.error('Error reading data.json:', error);
@@ -34,8 +39,10 @@ function readData() {
 }
 
 function writeData(data) {
+  const tmp = DATA_FILE + '.tmp';
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tmp, DATA_FILE);
   } catch (error) {
     console.error('Error writing data.json:', error);
   }
@@ -46,26 +53,30 @@ function readPushSubs() {
     if (fs.existsSync(PUSH_FILE)) {
       return JSON.parse(fs.readFileSync(PUSH_FILE, 'utf8') || '{}');
     }
-  } catch (error) {
-    console.error('Error reading push subscriptions:', error);
+  } catch {
+    return { web: [], fcm: [] };
   }
   return { web: [], fcm: [] };
 }
 
 function writePushSubs(data) {
+  const tmp = PUSH_FILE + '.tmp';
   try {
-    fs.writeFileSync(PUSH_FILE, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tmp, PUSH_FILE);
   } catch (error) {
     console.error('Error writing push subscriptions:', error);
   }
 }
 
-// Setup VAPID keys for Web Push
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BMrRdVqYlDFYjOMZvK6VDFPJ8FS3jDodY_yOZkLDSlVDD1g6OKQYpqewo5EAET12nR7PG_6D5N52N2xqxArQCys';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '7UPkPqfUw74Pk8dOX1VqjX7RkAfDB_B9gBpQBBAMWxI';
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webPush.setVapidDetails('mailto:contact@cocalendar.app', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  console.log('Web Push: VAPID keys configured');
+} else {
+  console.warn('Web Push: VAPID keys not set. Push notifications disabled. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY env vars.');
 }
 
 async function sendPushToCalendar(code, title, body) {
@@ -74,41 +85,35 @@ async function sendPushToCalendar(code, title, body) {
 
   const payload = JSON.stringify({ title, body, url: '/' });
   const results = await Promise.allSettled(
-    subs.web.map(async (sub) => {
-      try {
-        await webPush.sendNotification(sub, payload);
-      } catch (err) {
-        if (err.statusCode === 410 || err.statusCode === 404) {
-          return false;
-        }
-        throw err;
-      }
-    })
+    subs.web.map(sub => webPush.sendNotification(sub, payload).catch(err => {
+      if (err.statusCode === 410 || err.statusCode === 404) return { expired: true };
+      throw err;
+    }))
   );
 
-  const valid = subs.web.filter((_, i) => results[i].value !== false);
+  const valid = subs.web.filter((_, i) => {
+    const r = results[i];
+    return r.status === 'fulfilled' && !r.value?.expired;
+  });
+
   if (valid.length !== subs.web.length) {
     writePushSubs({ ...subs, web: valid });
   }
 }
 
-// Generate unique 6-digit uppercase alphanumeric code
 function generateCode() {
   const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let code = '';
+  let code;
   const data = readData();
-  
   do {
     code = 'CAL-';
     for (let i = 0; i < 6; i++) {
-      code += chars[Math.floor(Math.random() * chars.length)];
+      code += chars[crypto.randomInt(chars.length)];
     }
-  } while (data.calendars && data.calendars[code]);
-  
+  } while (data.calendars?.[code]);
   return code;
 }
 
-// Broadcast message to all clients on a specific calendar
 function broadcastToCalendar(code, message, senderWs = null) {
   let count = 0;
   for (const [ws, info] of clients.entries()) {
@@ -117,10 +122,26 @@ function broadcastToCalendar(code, message, senderWs = null) {
       count++;
     }
   }
-  console.log(`Broadcasted to ${count} clients on calendar ${code}`);
 }
 
-// --- REST API Endpoints ---
+function sanitize(str, maxLen = 200) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[<>&"']/g, '').trim().substring(0, maxLen);
+}
+
+function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime()); }
+function isValidTime(t) { return /^([01]\d|2[0-3]):[0-5]\d$/.test(t); }
+
+const generalLimiter = rateLimit({ windowMs: 60000, max: 60, message: { error: 'Trop de requêtes, réessayez plus tard.' } });
+const authLimiter = rateLimit({ windowMs: 60000, max: 10, message: { error: 'Trop de tentatives, réessayez plus tard.' } });
+
+app.use('/api/', generalLimiter);
+
+function getCalendarSafe(code) {
+  const data = readData();
+  const cal = data.calendars?.[code.toUpperCase()];
+  return cal || null;
+}
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), vapid: !!VAPID_PUBLIC_KEY });
@@ -130,8 +151,8 @@ app.post('/api/push/register', (req, res) => {
   const { subscription, token, platform } = req.body;
   const subs = readPushSubs();
 
-  if (subscription) {
-    const exists = subs.web.some(s => JSON.stringify(s) === JSON.stringify(subscription));
+  if (subscription?.endpoint) {
+    const exists = subs.web.some(s => s.endpoint === subscription.endpoint);
     if (!exists) subs.web.push(subscription);
   }
   if (token && platform === 'fcm') {
@@ -140,60 +161,46 @@ app.post('/api/push/register', (req, res) => {
   }
 
   writePushSubs(subs);
-  res.json({ success: true, count: subs.web.length + subs.fcm.length });
+  res.json({ success: true });
 });
 
-// Create a new calendar
-app.post('/api/calendar/create', (req, res) => {
-  const { name, creator } = req.body;
+app.post('/api/calendar/create', authLimiter, (req, res) => {
+  const name = sanitize(req.body.name, 25);
+  const creator = sanitize(req.body.creator, 15);
+
   if (!name || !creator) {
-    return res.status(400).json({ error: 'Calendar name and creator are required' });
+    return res.status(400).json({ error: 'Nom et créateur requis (2-25 caractères).' });
   }
 
   const code = generateCode();
   const data = readData();
 
-  data.calendars = data.calendars || {};
   data.calendars[code] = {
-    name,
-    code,
-    creator,
+    name, code, creator,
     createdAt: new Date().toISOString(),
     members: [creator],
     events: []
   };
 
   writeData(data);
-  console.log(`Calendar created: ${name} (${code}) by ${creator}`);
   res.json({ code, name, creator });
 });
 
-// Join an existing calendar
 app.post('/api/calendar/:code/join', (req, res) => {
-  const { code } = req.params;
-  const { username } = req.body;
+  const username = sanitize(req.body.username, 15);
+  if (!username) return res.status(400).json({ error: 'Pseudo requis.' });
 
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
 
-  const data = readData();
-  const calendar = data.calendars ? data.calendars[code.toUpperCase()] : null;
+  if (!cal.members.includes(username)) {
+    cal.members.push(username);
+    writeData(readData());
 
-  if (!calendar) {
-    return res.status(404).json({ error: 'Calendar not found' });
-  }
-
-  const cleanCode = code.toUpperCase();
-  if (!calendar.members.includes(username)) {
-    calendar.members.push(username);
-    writeData(data);
-    
-    // Broadcast member joined
-    broadcastToCalendar(cleanCode, {
+    broadcastToCalendar(cal.code, {
       type: 'notification',
       notification: {
-        id: Math.random().toString(),
+        id: crypto.randomUUID(),
         type: 'join',
         message: `${username} a rejoint le calendrier.`,
         timestamp: new Date().toISOString()
@@ -202,182 +209,219 @@ app.post('/api/calendar/:code/join', (req, res) => {
   }
 
   res.json({
-    code: cleanCode,
-    name: calendar.name,
-    members: calendar.members,
-    events: calendar.events
+    code: cal.code, name: cal.name,
+    members: cal.members, events: cal.events
   });
 });
 
-// Get calendar details
 app.get('/api/calendar/:code', (req, res) => {
-  const { code } = req.params;
-  const data = readData();
-  const calendar = data.calendars ? data.calendars[code.toUpperCase()] : null;
-
-  if (!calendar) {
-    return res.status(404).json({ error: 'Calendar not found' });
-  }
-
-  res.json(calendar);
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  res.json(cal);
 });
 
-// Add an event to a calendar
 app.post('/api/calendar/:code/event', (req, res) => {
-  const { code } = req.params;
-  const { event } = req.body; // { title, date, start, end, description, creator, color }
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
 
-  if (!event || !event.title || !event.date || !event.start || !event.creator) {
-    return res.status(400).json({ error: 'Missing required event fields' });
+  const ev = req.body.event || {};
+  const title = sanitize(ev.title, 40);
+  const date = ev.date;
+  const start = ev.start;
+  const end = ev.end || '';
+  const description = sanitize(ev.description, 150);
+  const creator = sanitize(ev.creator, 15);
+  const color = /^#[0-9a-f]{6}$/i.test(ev.color || '') ? ev.color : '#6366f1';
+
+  if (!title || !date || !start || !creator) {
+    return res.status(400).json({ error: 'Champs requis manquants : titre, date, heure, créateur.' });
   }
-
-  const data = readData();
-  const cleanCode = code.toUpperCase();
-  const calendar = data.calendars ? data.calendars[cleanCode] : null;
-
-  if (!calendar) {
-    return res.status(404).json({ error: 'Calendar not found' });
-  }
+  if (!isValidDate(date)) return res.status(400).json({ error: 'Format date invalide (YYYY-MM-DD).' });
+  if (!isValidTime(start)) return res.status(400).json({ error: 'Format heure invalide (HH:MM).' });
+  if (end && !isValidTime(end)) return res.status(400).json({ error: 'Format heure de fin invalide (HH:MM).' });
+  if (!cal.members.includes(creator)) return res.status(403).json({ error: 'Vous n\'êtes pas membre de ce calendrier.' });
 
   const newEvent = {
-    id: Math.random().toString(36).substring(2, 9),
-    title: event.title,
-    date: event.date, // YYYY-MM-DD
-    start: event.start, // HH:MM
-    end: event.end || '', // HH:MM
-    description: event.description || '',
-    creator: event.creator,
-    color: event.color || '#6366f1', // default indigo
+    id: crypto.randomUUID(),
+    title, date, start, end, description, creator, color,
     createdAt: new Date().toISOString()
   };
 
-  calendar.events = calendar.events || [];
-  calendar.events.push(newEvent);
-  writeData(data);
+  cal.events.push(newEvent);
+  writeData(readData());
 
-  broadcastToCalendar(cleanCode, {
-    type: 'sync',
-    events: calendar.events
-  });
-
-  const notifMsg = `${event.creator} a ajouté "${event.title}" à ${event.start}.`;
-  broadcastToCalendar(cleanCode, {
-    type: 'notification',
-    notification: {
-      id: Math.random().toString(),
-      type: 'add',
-      message: notifMsg,
-      timestamp: new Date().toISOString()
-    }
-  });
-
-  sendPushToCalendar(cleanCode, 'CoCalendar - Nouvel événement', notifMsg);
+  const msg = `${creator} a ajouté "${title}" à ${start}.`;
+  broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
+  broadcastToCalendar(cal.code, { type: 'notification', notification: { id: crypto.randomUUID(), type: 'add', message: msg, timestamp: new Date().toISOString() } });
+  sendPushToCalendar(cal.code, 'CoCalendar - Nouvel événement', msg);
 
   res.json(newEvent);
 });
 
-// Delete / Cancel an event
+app.put('/api/calendar/:code/event/:id', (req, res) => {
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+
+  const evIdx = cal.events.findIndex(e => e.id === req.params.id);
+  if (evIdx === -1) return res.status(404).json({ error: 'Événement introuvable.' });
+
+  const existing = cal.events[evIdx];
+  const body = req.body.event || {};
+  const title = body.title !== undefined ? sanitize(body.title, 40) : existing.title;
+  const date = body.date !== undefined ? body.date : existing.date;
+  const start = body.start !== undefined ? body.start : existing.start;
+  const end = body.end !== undefined ? body.end : existing.end;
+  const description = body.description !== undefined ? sanitize(body.description, 150) : existing.description;
+  const color = body.color !== undefined ? (/^#[0-9a-f]{6}$/i.test(body.color) ? body.color : existing.color) : existing.color;
+
+  if (date && !isValidDate(date)) return res.status(400).json({ error: 'Format date invalide.' });
+  if (start && !isValidTime(start)) return res.status(400).json({ error: 'Format heure invalide.' });
+  if (end && !isValidTime(end)) return res.status(400).json({ error: 'Format heure de fin invalide.' });
+
+  cal.events[evIdx] = { ...existing, title, date, start, end, description, color, updatedAt: new Date().toISOString() };
+  writeData(readData());
+
+  const msg = `${existing.creator} a modifié "${title}".`;
+  broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
+  broadcastToCalendar(cal.code, { type: 'notification', notification: { id: crypto.randomUUID(), type: 'edit', message: msg, timestamp: new Date().toISOString() } });
+
+  res.json(cal.events[evIdx]);
+});
+
 app.delete('/api/calendar/:code/event/:id', (req, res) => {
-  const { code, id } = req.params;
-  const { username } = req.query; // Who deleted it
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
 
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
+  const username = sanitize(req.query.username, 15);
+  if (!username) return res.status(400).json({ error: 'Username requis.' });
+  if (!cal.members.includes(username)) return res.status(403).json({ error: 'Vous n\'êtes pas membre de ce calendrier.' });
 
-  const data = readData();
-  const cleanCode = code.toUpperCase();
-  const calendar = data.calendars ? data.calendars[cleanCode] : null;
+  const evIdx = cal.events.findIndex(e => e.id === req.params.id);
+  if (evIdx === -1) return res.status(404).json({ error: 'Événement introuvable.' });
 
-  if (!calendar) {
-    return res.status(404).json({ error: 'Calendar not found' });
-  }
+  const deleted = cal.events[evIdx];
+  cal.events.splice(evIdx, 1);
+  writeData(readData());
 
-  const eventIndex = calendar.events.findIndex(e => e.id === id);
-  if (eventIndex === -1) {
-    return res.status(404).json({ error: 'Event not found' });
-  }
+  const msg = `${username} a annulé "${deleted.title}".`;
+  broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
+  broadcastToCalendar(cal.code, { type: 'notification', notification: { id: crypto.randomUUID(), type: 'delete', message: msg, timestamp: new Date().toISOString() } });
+  sendPushToCalendar(cal.code, 'CoCalendar - Événement annulé', msg);
 
-  const deletedEvent = calendar.events[eventIndex];
-  calendar.events.splice(eventIndex, 1);
-  writeData(data);
-
-  broadcastToCalendar(cleanCode, {
-    type: 'sync',
-    events: calendar.events
-  });
-
-  const notifMsg = `${username} a annulé "${deletedEvent.title}".`;
-  broadcastToCalendar(cleanCode, {
-    type: 'notification',
-    notification: {
-      id: Math.random().toString(),
-      type: 'delete',
-      message: notifMsg,
-      timestamp: new Date().toISOString()
-    }
-  });
-
-  sendPushToCalendar(cleanCode, 'CoCalendar - Événement annulé', notifMsg);
-
-  res.json({ success: true, id });
+  res.json({ success: true, id: req.params.id });
 });
 
-// Bulk Import Events
+app.delete('/api/calendar/:code/member/:username', (req, res) => {
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+
+  const username = sanitize(req.params.username, 15);
+  const idx = cal.members.indexOf(username);
+  if (idx === -1) return res.status(404).json({ error: 'Membre introuvable.' });
+
+  cal.members.splice(idx, 1);
+
+  if (cal.members.length === 0) {
+    const data = readData();
+    delete data.calendars[cal.code];
+    writeData(data);
+  } else {
+    writeData(readData());
+  }
+
+  broadcastToCalendar(cal.code, {
+    type: 'notification',
+    notification: { id: crypto.randomUUID(), type: 'leave', message: `${username} a quitté le calendrier.`, timestamp: new Date().toISOString() }
+  });
+
+  res.json({ success: true });
+});
+
 app.post('/api/calendar/:code/import', (req, res) => {
-  const { code } = req.params;
-  const { events, username } = req.body; // array of events, importer username
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
 
-  if (!events || !Array.isArray(events) || !username) {
-    return res.status(400).json({ error: 'Events array and username are required' });
+  const events = req.body.events;
+  const username = sanitize(req.body.username, 15);
+  if (!events || !Array.isArray(events) || !events.length || !username) {
+    return res.status(400).json({ error: 'Tableau d\'événements et nom requis.' });
   }
+  if (!cal.members.includes(username)) return res.status(403).json({ error: 'Vous n\'êtes pas membre de ce calendrier.' });
 
-  const data = readData();
-  const cleanCode = code.toUpperCase();
-  const calendar = data.calendars ? data.calendars[cleanCode] : null;
-
-  if (!calendar) {
-    return res.status(404).json({ error: 'Calendar not found' });
-  }
-
-  const importedEvents = events.map(e => ({
-    id: Math.random().toString(36).substring(2, 9),
-    title: e.title,
-    date: e.date, // YYYY-MM-DD
-    start: e.start, // HH:MM
-    end: e.end || '',
-    description: e.description || '',
+  const imported = events.slice(0, 500).map(e => ({
+    id: crypto.randomUUID(),
+    title: sanitize(e.title, 40),
+    date: isValidDate(e.date) ? e.date : '',
+    start: isValidTime(e.start) ? e.start : '00:00',
+    end: e.end && isValidTime(e.end) ? e.end : '',
+    description: sanitize(e.description, 150),
     creator: username,
-    color: e.color || '#10b981', // green default for imported
+    color: /^#[0-9a-f]{6}$/i.test(e.color || '') ? e.color : '#10b981',
     createdAt: new Date().toISOString()
-  }));
+  })).filter(e => e.title && e.date);
 
-  calendar.events = calendar.events || [];
-  calendar.events.push(...importedEvents);
-  writeData(data);
+  if (!imported.length) return res.status(400).json({ error: 'Aucun événement valide à importer.' });
 
-  broadcastToCalendar(cleanCode, {
-    type: 'sync',
-    events: calendar.events
-  });
+  cal.events.push(...imported);
+  writeData(readData());
 
-  const notifMsg = `${username} a importé ${importedEvents.length} événement(s).`;
-  broadcastToCalendar(cleanCode, {
-    type: 'notification',
-    notification: {
-      id: Math.random().toString(),
-      type: 'import',
-      message: notifMsg,
-      timestamp: new Date().toISOString()
-    }
-  });
+  const msg = `${username} a importé ${imported.length} événement(s).`;
+  broadcastToCalendar(cal.code, { type: 'sync', events: cal.events });
+  broadcastToCalendar(cal.code, { type: 'notification', notification: { id: crypto.randomUUID(), type: 'import', message: msg, timestamp: new Date().toISOString() } });
+  sendPushToCalendar(cal.code, 'CoCalendar - Import', msg);
 
-  sendPushToCalendar(cleanCode, 'CoCalendar - Import', notifMsg);
-
-  res.json({ success: true, count: importedEvents.length });
+  res.json({ success: true, count: imported.length });
 });
 
-// --- WebSocket Setup ---
+app.get('/api/calendar/:code/export', (req, res) => {
+  const cal = getCalendarSafe(req.params.code);
+  if (!cal) return res.status(404).json({ error: 'Calendrier introuvable.' });
+
+  const format = req.query.format || 'ics';
+
+  if (format === 'json') {
+    return res.json(cal);
+  }
+
+  let ics = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//CoCalendar//FR',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:' + cal.name,
+    'X-WR-CALDESC:CoCalendar - ' + cal.code
+  ];
+
+  for (const ev of cal.events) {
+    const startIcs = ev.date.replace(/-/g, '') + 'T' + ev.start.replace(/:/g, '') + '00';
+    const endDate = ev.end ? ev.date + 'T' + ev.end : ev.date + 'T' + (String(parseInt(ev.start.split(':')[0]) + 1).padStart(2, '0') + ':00');
+    const endIcs = endDate.replace(/[-:]/g, '') + '00';
+
+    ics.push('BEGIN:VEVENT');
+    ics.push('UID:' + ev.id + '@cocalendar');
+    ics.push('DTSTART:' + startIcs);
+    ics.push('DTEND:' + endIcs);
+    ics.push('SUMMARY:' + ev.title);
+    if (ev.description) ics.push('DESCRIPTION:' + ev.description.replace(/\n/g, '\\n'));
+    ics.push('CREATOR:' + ev.creator);
+    ics.push('END:VEVENT');
+  }
+
+  ics.push('END:VCALENDAR');
+
+  res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${cal.code}.ics"`);
+  res.send(ics.join('\r\n'));
+});
+
+app.use((err, _req, res, _next) => {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'JSON invalide.' });
+  }
+  console.error('Server error:', err);
+  res.status(500).json({ error: 'Erreur interne du serveur.' });
+});
 
 server.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (ws) => {
@@ -386,58 +430,47 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 wss.on('connection', (ws) => {
-  console.log('New WebSocket client connected');
-
   ws.on('message', (messageStr) => {
     try {
-      const message = JSON.parse(messageStr);
-      
-      if (message.type === 'join') {
-        const { code, username } = message;
+      const msg = JSON.parse(messageStr);
+
+      if (msg.type === 'join') {
+        const code = msg.code?.toUpperCase();
+        const username = msg.username;
         if (code && username) {
-          const cleanCode = code.toUpperCase();
-          clients.set(ws, { code: cleanCode, username });
-          console.log(`WS Client registered: ${username} to calendar ${cleanCode}`);
-          
-          // Send acknowledgement
-          ws.send(JSON.stringify({ type: 'joined', code: cleanCode }));
+          clients.set(ws, { code, username });
+          ws.send(JSON.stringify({ type: 'joined', code }));
         }
       }
-      
-      if (message.type === 'ping') {
+
+      if (msg.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
       }
-    } catch (e) {
-      console.error('Error handling WebSocket message:', e);
-    }
+    } catch {}
   });
 
   ws.on('close', () => {
-    const clientInfo = clients.get(ws);
-    if (clientInfo) {
-      console.log(`WS Client disconnected: ${clientInfo.username} from ${clientInfo.code}`);
-      clients.delete(ws);
-    } else {
-      console.log('WS Client disconnected (unregistered)');
-    }
+    const info = clients.get(ws);
+    if (info) clients.delete(ws);
   });
 });
 
-// --- Serve Static Client Build (Production mode) ---
 const clientDistPath = path.resolve(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDistPath)) {
-  app.use(express.static(clientDistPath));
-  // SPA catch-all: serve index.html for all non-API routes
+  app.use(express.static(clientDistPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    }
+  }));
   app.get('*', (req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'));
   });
-  console.log('Serving static client build from:', clientDistPath);
 }
 
-// Start Server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`  Local:   http://localhost:${PORT}`);
 });
-

@@ -418,6 +418,16 @@ html.native-app body {
   color: var(--text-main);
 }
 
+.today-btn {
+  color: var(--primary) !important;
+  background: rgba(99, 102, 241, 0.1) !important;
+  border-radius: 8px !important;
+}
+
+.today-btn:hover {
+  background: rgba(99, 102, 241, 0.2) !important;
+}
+
 .icon-btn {
   background: none;
   border: none;
@@ -636,15 +646,24 @@ html.native-app body {
 }
 
 .event-action-col {
-  opacity: 0.4;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0.6;
   transition: var(--transition-smooth);
 }
 
-.event-card:hover .event-action-col {
+.event-card:hover .event-action-col,
+.event-card:active .event-action-col {
   opacity: 1;
 }
 
-.btn-delete-event {
+@media (max-width: 480px) {
+  .event-action-col {
+    opacity: 0.8;
+  }
+}
+
+.btn-icon-action {
   background: none;
   border: none;
   color: var(--text-dim);
@@ -657,9 +676,21 @@ html.native-app body {
   justify-content: center;
 }
 
-.btn-delete-event:hover {
+.btn-icon-action:hover,
+.btn-icon-action:active {
+  color: var(--primary);
+  background: rgba(255,255,255,0.08);
+}
+
+.btn-icon-action.btn-delete:hover,
+.btn-icon-action.btn-delete:active {
   color: var(--danger);
   background: var(--danger-glow);
+}
+
+.btn-icon-action:disabled {
+  opacity: 0.3;
+  pointer-events: none;
 }
 
 /* Floating Action Button (FAB) */
