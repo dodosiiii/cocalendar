@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group android:translateX="18" android:translateY="18">
+    <!-- Card background (white rounded card) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M4,10C4,6.69 6.69,4 10,4L62,4C65.31,4 68,6.69 68,10L68,62C68,65.31 65.31,68 62,68L10,68C6.69,68 4,65.31 4,62Z"
+        android:strokeWidth="0"/>
+    <!-- Purple header strip -->
+    <path
+        android:fillColor="#6366f1"
+        android:pathData="M4,4L68,4L68,24C68,24 4,24 4,24Z"/>
+    <!-- Calendar lines -->
+    <path
+        android:fillColor="#E5E7EB"
+        android:pathData="M12,32L60,32 M12,40L56,40 M12,48L52,48 M12,56L48,56"
+        android:strokeWidth="2.5"
+        android:strokeColor="#E5E7EB"/>
+    <!-- Hangers -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22,0L26,0C27.1,0 28,0.9 28,2L28,6C28,7.1 27.1,8 26,8L22,8C20.9,8 20,7.1 20,6L20,2C20,0.9 20.9,0 22,0Z"
+        android:strokeWidth="0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,0L48,0C49.1,0 50,0.9 50,2L50,6C50,7.1 49.1,8 48,8L44,8C42.9,8 42,7.1 42,6L42,2C42,0.9 42.9,0 44,0Z"
+        android:strokeWidth="0"/>
+  </group>
+</vector>

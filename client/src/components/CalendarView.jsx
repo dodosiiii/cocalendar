@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Plus, Trash2, Calendar as CalendarIcon, User
 
 const COLORS = ['#6366f1', '#a855f7', '#10b981', '#f59e0b', '#ef4444'];
 
-const emptyForm = { title: '', start: '12:00', end: '', description: '', color: COLORS[0] };
+const emptyForm = { title: '', start: '12:00', end: '', description: '', color: COLORS[0], recType: '', recDays: [], recWeek2Days: [], recDuration: '' };
 
 export default function CalendarView({ calendar, username, apiBaseUrl, onAddEvent, onUpdateEvent, onDeleteEvent }) {
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -41,11 +41,41 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
 
   const calendarDays = getDaysInMonth();
   const events = calendar.events || [];
-  const selectedDayEvents = events.filter(e => e.date === selectedDate).sort((a, b) => a.start.localeCompare(b.start));
+
+  const matchesRecurrence = (event, dateStr) => {
+    if (!event.recurrence) return false;
+    const rec = event.recurrence;
+    const targetDate = new Date(dateStr + 'T12:00:00');
+    const eventDate = new Date(event.date + 'T12:00:00');
+    if (targetDate < eventDate) return false;
+    if (rec.endDate && dateStr > rec.endDate) return false;
+    switch (rec.type) {
+      case 'weekly': {
+        const dow = targetDate.getDay() || 7;
+        const diffDays = Math.round((targetDate - eventDate) / 86400000);
+        const diffWeeks = Math.floor(diffDays / 7);
+        if (rec.week2Days) {
+          return diffWeeks % 2 === 0 ? rec.days.includes(dow) : rec.week2Days.includes(dow);
+        }
+        return rec.days?.includes(dow);
+      }
+      case 'monthly': return targetDate.getDate() === eventDate.getDate();
+      case 'yearly': return targetDate.getMonth() === eventDate.getMonth() && targetDate.getDate() === eventDate.getDate();
+      default: return false;
+    }
+  };
+
+  const selectedDayEvents = events.filter(e => e.date === selectedDate || matchesRecurrence(e, selectedDate)).sort((a, b) => a.start.localeCompare(b.start));
 
   const getEventDotsForDate = (dateStr) => {
     if (!dateStr) return [];
-    return Array.from(new Set(events.filter(e => e.date === dateStr).map(e => e.color))).slice(0, 3);
+    const matchingColors = [];
+    for (const e of events) {
+      if (e.date === dateStr || matchesRecurrence(e, dateStr)) {
+        matchingColors.push(e.color);
+      }
+    }
+    return Array.from(new Set(matchingColors)).slice(0, 3);
   };
 
   const openAddSheet = () => {
@@ -56,7 +86,13 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
 
   const openEditSheet = (ev) => {
     setEditingEvent(ev);
-    setForm({ title: ev.title, start: ev.start, end: ev.end || '', description: ev.description || '', color: ev.color || COLORS[0] });
+    setForm({
+      title: ev.title, start: ev.start, end: ev.end || '', description: ev.description || '', color: ev.color || COLORS[0],
+      recType: ev.recurrence?.week2Days ? 'biweekly' : (ev.recurrence?.type || ''),
+      recDays: ev.recurrence?.days || [],
+      recWeek2Days: ev.recurrence?.week2Days || [],
+      recDuration: ev.recurrence?.duration || '',
+    });
     setIsSheetOpen(true);
   };
 
@@ -68,6 +104,31 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     setLoading(true);
 
     try {
+      let recurrence = null;
+      if (form.recType) {
+        if (form.recType === 'weekly' || form.recType === 'biweekly') {
+          const days = form.recType === 'biweekly' && form.recDays.length === 0
+            ? form.recWeek2Days
+            : form.recDays;
+          if (days.length > 0 || form.recWeek2Days.length > 0) {
+            recurrence = { type: 'weekly', days };
+            if (form.recType === 'biweekly') recurrence.week2Days = form.recWeek2Days;
+          } else {
+            recurrence = { type: 'weekly', days: [new Date(selectedDate + 'T12:00:00').getDay() || 7] };
+          }
+        } else {
+          recurrence = { type: form.recType };
+        }
+        if (recurrence && form.recDuration) {
+          const d = new Date(selectedDate + 'T12:00:00');
+          d.setMonth(d.getMonth() + parseInt(form.recDuration));
+          recurrence.endDate = d.toISOString().slice(0, 10);
+          recurrence.duration = form.recDuration;
+        }
+      }
+
+      console.log('Recurrence avant submit:', JSON.stringify(recurrence));
+
       const payload = {
         title: form.title.trim(),
         date: selectedDate,
@@ -75,8 +136,10 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
         end: form.end,
         description: form.description.trim(),
         creator: username,
-        color: form.color
+        color: form.color,
+        recurrence
       };
+      console.log('Payload envoyé:', JSON.stringify(payload));
 
       if (editingEvent) {
         const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/event/${editingEvent.id}`, {
@@ -109,7 +172,9 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
   };
 
   const handleDelete = async (eventId) => {
-    if (!window.confirm("Annuler cet événement ?")) return;
+    const ev = events.find(e => e.id === eventId);
+    const msg = ev?.recurrence ? "Supprimer cet événement récurrent ? (toutes les occurrences)" : "Annuler cet événement ?";
+    if (!window.confirm(msg)) return;
     setDeletingId(eventId);
     try {
       const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/event/${eventId}?username=${encodeURIComponent(username)}`, { method: 'DELETE' });
@@ -245,6 +310,95 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
               </div>
             </div>
 
+            <div className="input-group" style={{ borderTop: '1px solid var(--border-light)', paddingTop: '1rem' }}>
+              <label>Répétition</label>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {[
+                  { value: '', label: 'Jamais' },
+                  { value: 'weekly', label: 'Chaque sem.' },
+                  { value: 'biweekly', label: '1 sem./2' },
+                  { value: 'monthly', label: 'Tous les mois' },
+                  { value: 'yearly', label: 'Tous les ans' },
+                ].map(opt => (
+                  <button key={opt.value} type="button"
+                    className={`day-toggle ${form.recType === opt.value ? 'active' : ''}`}
+                    onClick={() => setForm(f => ({ ...f, recType: f.recType === opt.value ? '' : opt.value }))}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {(form.recType === 'weekly' || form.recType === 'biweekly') && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                    {form.recType === 'biweekly' ? 'Semaine A' : 'Jours actifs'}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                    {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((d, i) => {
+                      const dayNum = i + 1;
+                      return (
+                        <button key={d} type="button"
+                          className={`day-toggle ${form.recDays.includes(dayNum) ? 'active' : ''}`}
+                          onClick={() => setForm(f => ({
+                            ...f, recDays: f.recDays.includes(dayNum)
+                              ? f.recDays.filter(x => x !== dayNum)
+                              : [...f.recDays, dayNum]
+                          }))}
+                        >
+                          {d}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {form.recType === 'biweekly' && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                    Semaine B
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                    {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((d, i) => {
+                      const dayNum = i + 1;
+                      return (
+                        <button key={d} type="button"
+                          className={`day-toggle ${form.recWeek2Days.includes(dayNum) ? 'active' : ''}`}
+                          onClick={() => setForm(f => ({
+                            ...f, recWeek2Days: f.recWeek2Days.includes(dayNum)
+                              ? f.recWeek2Days.filter(x => x !== dayNum)
+                              : [...f.recWeek2Days, dayNum]
+                          }))}
+                        >
+                          {d}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {form.recType && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '0.5rem' }}>
+                    Pendant
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    {[
+                      { value: '', label: 'Illimité' },
+                      { value: '1', label: '1 mois' },
+                      { value: '2', label: '2 mois' },
+                      { value: '3', label: '3 mois' },
+                    ].map(opt => (
+                      <button key={opt.value} type="button"
+                        className={`day-toggle ${form.recDuration === opt.value ? 'active' : ''}`}
+                        onClick={() => setForm(f => ({ ...f, recDuration: f.recDuration === opt.value ? '' : opt.value }))}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="form-actions">
               <button type="submit" className="btn-primary" disabled={loading}>
                 {loading ? 'Enregistrement...' : editingEvent ? 'Enregistrer les modifications' : 'Ajouter au Calendrier'}

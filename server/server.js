@@ -245,6 +245,7 @@ app.post('/api/calendar/:code/event', (req, res) => {
   const newEvent = {
     id: crypto.randomUUID(),
     title, date, start, end, description, creator, color,
+    recurrence: ev.recurrence && typeof ev.recurrence === 'object' ? ev.recurrence : null,
     createdAt: new Date().toISOString()
   };
 
@@ -275,12 +276,13 @@ app.put('/api/calendar/:code/event/:id', (req, res) => {
   const end = body.end !== undefined ? body.end : existing.end;
   const description = body.description !== undefined ? sanitize(body.description, 150) : existing.description;
   const color = body.color !== undefined ? (/^#[0-9a-f]{6}$/i.test(body.color) ? body.color : existing.color) : existing.color;
+  const recurrence = body.recurrence !== undefined ? (typeof body.recurrence === 'object' ? body.recurrence : null) : existing.recurrence;
 
   if (date && !isValidDate(date)) return res.status(400).json({ error: 'Format date invalide.' });
   if (start && !isValidTime(start)) return res.status(400).json({ error: 'Format heure invalide.' });
   if (end && !isValidTime(end)) return res.status(400).json({ error: 'Format heure de fin invalide.' });
 
-  cal.events[evIdx] = { ...existing, title, date, start, end, description, color, updatedAt: new Date().toISOString() };
+  cal.events[evIdx] = { ...existing, title, date, start, end, description, color, recurrence, updatedAt: new Date().toISOString() };
   writeData(data);
 
   const msg = `${existing.creator} a modifié "${title}".`;

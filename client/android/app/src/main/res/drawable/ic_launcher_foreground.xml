@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group android:translateX="12" android:translateY="12">
+    <!-- Calendar body rounded rect -->
+    <path android:fillColor="#FFFFFF"
+          android:pathData="M8,8L76,8 C12,8 8,12 8,17L8,73 C8,77 12,81 16,81L68,81 C72,81 76,77 76,73L76,17 C76,12 72,8 68,8Z"/>
+    <!-- Header bar -->
+    <path android:fillColor="#6366f1"
+          android:pathData="M8,16L76,16L76,28 C76,28 8,28 8,28Z"/>
+    <!-- Text CoCalendar -->
+    <path android:fillColor="#6366f1"
+          android:pathData="M16,36L30,36L30,40L21,40L21,44L29,44L29,48L21,48L21,53L31,53L31,57L16,57Z
+                           M33,36L38,36L38,57L33,57Z
+                           M40,36L50,36C53,36 55,38 55,41L55,43C55,46 53,48 50,48L45,48L45,57L40,57ZM45,44L49,44C50,44 51,43 51,42L51,40C51,39 50,38 49,38L45,38Z
+                           M57,36L62,36L65,49L68,36L72,36L68,57L63,57Z"/>
+    <!-- Calendar lines -->
+    <path android:fillColor="#E5E7EB"
+          android:pathData="M14,63L70,63 M14,67L64,67 M14,71L58,71"
+          android:strokeWidth="2" android:strokeColor="#E5E7EB"/>
+  </group>
+</vector>

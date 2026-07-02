@@ -856,6 +856,33 @@ html.native-app body {
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
 }
 
+/* Day toggle buttons for recurrence */
+.day-toggle {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  font-family: var(--font-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  min-width: 36px;
+  text-align: center;
+}
+
+.day-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.day-toggle.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+  box-shadow: 0 0 8px var(--primary-glow);
+}
+
 /* Settings & Import View */
 .settings-container {
   display: flex;

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Calendar as CalendarIcon, Settings, Bell, X, RefreshCw } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
-// import { PushNotifications } from '@capacitor/push-notifications'; // uncomment when Firebase is set up
 import JoinCreateView from './components/JoinCreateView';
 import CalendarView from './components/CalendarView';
 import SettingsView from './components/SettingsView';

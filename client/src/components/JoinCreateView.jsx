@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, ArrowRight, Globe, ChevronDown, ChevronUp, Check, AlertCircle, Wifi } from 'lucide-react';
+import { Plus, ArrowRight, Globe, ChevronDown, ChevronUp, Check, AlertCircle, Wifi } from 'lucide-react';
 import { saveServerUrl, testServerConnection } from '../config/serverUrl';
 import { isNativeApp } from '../utils/platform';
 
@@ -136,7 +136,7 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
   return (
     <div className="auth-container">
       <div className="auth-logo pulse-glow">
-        <Calendar size={40} color="white" />
+        <img src="/icons/icon-512.svg" alt="CoCalendar" style={{ width: 40, height: 40, borderRadius: 10 }} />
       </div>
       
       <div className="auth-welcome">
