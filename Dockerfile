@@ -1,10 +1,10 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY package.json package-lock.json ./
 COPY client/package.json client/package-lock.json ./client/
 COPY server/package.json server/package-lock.json ./server/
-RUN npm install --prefix client --omit=dev && npm install --prefix server --omit=dev
+
+RUN npm install --prefix client && npm install --prefix server --omit=dev
 
 COPY client ./client
 COPY server ./server
