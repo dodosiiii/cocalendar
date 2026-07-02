@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: cocalendar
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health

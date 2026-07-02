@@ -1,0 +1,6 @@
+/* Reset stylesheet. Page styles are defined in App.css */
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: #030305;
+}
