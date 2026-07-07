@@ -61,8 +61,29 @@ export default function App() {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptRef = useRef(0);
+  const pingIntervalRef = useRef(null);
   const pushRegisteredRef = useRef(false);
   const restoringRef = useRef(true);
+  const calendarRef = useRef(null);
+
+  useEffect(() => { calendarRef.current = calendar; }, [calendar]);
+
+  // Sauvegarde des données en cache pour récupération immédiate après veille Render
+  useEffect(() => {
+    if (calendar) {
+      try { sessionStorage.setItem('cocalendar_cache', JSON.stringify(calendar)); } catch {}
+    }
+  }, [calendar]);
+
+  // Keep-alive HTTP pour éviter que Render ne mette le serveur en veille
+  useEffect(() => {
+    if (!API_BASE_URL) return;
+    const keepAlive = setInterval(() => {
+      fetch(`${API_BASE_URL}/api/health`).catch(() => {});
+    }, 600000);
+    fetch(`${API_BASE_URL}/api/health`).catch(() => {});
+    return () => clearInterval(keepAlive);
+  }, [API_BASE_URL]);
 
   const fetchCalendar = useCallback(async (code, user) => {
     try {
@@ -77,9 +98,14 @@ export default function App() {
       localStorage.setItem('cocalendar_user', user);
       setRestoring(false);
     } catch (err) {
-      setCalendar(null);
-      setRestoring(false);
-      if (!restoringRef.current) setFetchError(err.message);
+      // Si on a déjà des données en cache, on les garde (serveur en veille Render)
+      if (calendarRef.current) {
+        setWsStatus('disconnected');
+      } else {
+        setCalendar(null);
+        setRestoring(false);
+        if (!restoringRef.current) setFetchError(err.message);
+      }
     }
   }, [API_BASE_URL]);
 
@@ -92,7 +118,24 @@ export default function App() {
 
     if (savedCode && savedUser && API_BASE_URL) {
       setUsername(savedUser);
-      fetchCalendar(savedCode, savedUser).then(() => { restoringRef.current = false; });
+
+      // Restaurer les données depuis le cache pour un affichage immédiat
+      try {
+        const cached = sessionStorage.getItem('cocalendar_cache');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed.code === savedCode) {
+            setCalendar(parsed);
+            setRestoring(false);
+          }
+        }
+      } catch {}
+
+      fetchCalendar(savedCode, savedUser).then(() => {
+        restoringRef.current = false;
+      }, () => {
+        restoringRef.current = false;
+      });
     } else {
       setRestoring(false);
       restoringRef.current = false;
@@ -108,6 +151,12 @@ export default function App() {
         const savedUser = localStorage.getItem('cocalendar_user');
         if (savedCode && savedUser && calendar) {
           fetchCalendar(savedCode, savedUser);
+        }
+        // Force reconnexion WebSocket au retour sur l'app native
+        if (wsRef.current && wsRef.current.readyState !== WebSocket.OPEN) {
+          reconnectAttemptRef.current = 0;
+          if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+          wsRef.current.close();
         }
       }
     }).then(h => { handler = h; });
@@ -192,6 +241,16 @@ export default function App() {
         try {
           const data = JSON.parse(event.data);
 
+          if (data.type === 'joined') {
+            // On première connexion ou reconnexion après veille : récupérer les events à jour
+            fetch(`${API_BASE_URL}/api/calendar/${calendar.code}`)
+              .then(r => r.json())
+              .then(calData => {
+                setCalendar(prev => prev ? { ...prev, events: calData.events } : null);
+              })
+              .catch(() => {});
+          }
+
           if (data.type === 'sync') {
             setCalendar(prev => prev ? { ...prev, events: data.events } : null);
           }
@@ -212,9 +271,10 @@ export default function App() {
 
       ws.onclose = () => {
         setWsStatus('disconnected');
+        // Exponential backoff avec jitter : 1s, 2s, 4s, 8s, 16s, 30s max
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 30000);
         reconnectAttemptRef.current += 1;
-        reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay);
+        reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay + Math.random() * 1000);
       };
 
       ws.onerror = () => { ws.close(); };
@@ -222,11 +282,46 @@ export default function App() {
 
     connectWebSocket();
 
+    // Heartbeat client : envoie un ping toutes les 25s pour maintenir la connexion active
+    pingIntervalRef.current = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 25000);
+
+    // Reconnexion immédiate quand le réseau revient (ex : sortie de veille)
+    const handleOnline = () => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        reconnectAttemptRef.current = 0;
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        connectWebSocket();
+      }
+    };
+    window.addEventListener('online', handleOnline);
+
+    // Marquer déconnecté quand le réseau est perdu
+    window.addEventListener('offline', () => setWsStatus('disconnected'));
+
+    // Reconnexion quand l'onglet redevient visible (ex : déverrouillage téléphone)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          reconnectAttemptRef.current = 0;
+          if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+          connectWebSocket();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      clearInterval(pingIntervalRef.current);
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     };
-  }, [calendar?.code, username, WS_BASE_URL]);
+  }, [calendar?.code, username, WS_BASE_URL, API_BASE_URL]);
 
   const removeNotification = (id) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, fading: true } : n));
@@ -248,6 +343,7 @@ export default function App() {
     } catch {}
     localStorage.removeItem('cocalendar_code');
     localStorage.removeItem('cocalendar_user');
+    try { sessionStorage.removeItem('cocalendar_cache'); } catch {}
     setCalendar(null);
     setUsername('');
     setActiveTab('calendar');
@@ -312,6 +408,7 @@ export default function App() {
           <button type="button" className="btn-secondary" onClick={() => {
             localStorage.removeItem('cocalendar_code');
             localStorage.removeItem('cocalendar_user');
+            try { sessionStorage.removeItem('cocalendar_cache'); } catch {}
             setCalendar(null);
             setFetchError('');
           }}>

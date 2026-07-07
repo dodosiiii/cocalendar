@@ -54,7 +54,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
   }, [activeYear, activeMonth]);
 
   const calendarDays = useMemo(getDaysInMonth, [getDaysInMonth]);
-  const events = calendar.events || [];
+  const events = useMemo(() => calendar.events || [], [calendar.events]);
 
   const matchesRecurrence = useCallback((event, dateStr) => {
     if (!event.recurrence) return false;
@@ -289,7 +289,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
             <span style={{ marginLeft: '0.25rem' }}>{m === 'month' ? 'Mois' : 'Semaine'}</span>
           </button>
         ))}
-        <button type="button" onClick={() => setCurrentDate(new Date(activeYear, activeMonth, 1 + 30))} className="icon-btn" style={{ fontSize: '0.7rem' }}>{monthNames[(activeMonth + 1) % 12].slice(0, 3)}</button>
+        <button type="button" onClick={() => setCurrentDate(new Date(activeYear, activeMonth + 1, 1))} className="icon-btn" style={{ fontSize: '0.7rem' }}>{monthNames[(activeMonth + 1) % 12].slice(0, 3)}</button>
       </div>
 
       {viewMode === 'month' ? (

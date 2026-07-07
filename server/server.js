@@ -470,6 +470,9 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   ws.on('message', (messageStr) => {
     try {
       const msg = JSON.parse(messageStr);
@@ -495,6 +498,19 @@ wss.on('connection', (ws) => {
   });
 });
 
+// Heartbeat: ping toutes les 30s, supprime les clients qui ne répondent pas
+const HEARTBEAT_INTERVAL = 30000;
+const heartbeatTimer = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (!ws.isAlive) {
+      clients.delete(ws);
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL);
+
 const clientDistPath = path.resolve(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDistPath)) {
   app.use(express.static(clientDistPath, {
@@ -513,6 +529,11 @@ if (!fs.existsSync(DATA_FILE)) {
   writeData({ calendars: {} });
   console.log('Initialized empty data.json');
 }
+
+// Cleanup heartbeat on server close
+server.on('close', () => {
+  clearInterval(heartbeatTimer);
+});
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
