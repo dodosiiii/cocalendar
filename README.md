@@ -5,16 +5,16 @@ Calendrier collaboratif partagé en temps réel. Coordonnez vos événements et 
 
 | Fonctionnalité | Description |
 |---|---|
-|  Vue Calendrier** | Navigation mois/semaine/jour avec sélection rapide |
-|  Agenda** | Liste des événements à venir groupés par date |
-| *Membres** | Liste des participants, code d'invitation à partager |
-|  Temps réel** | Synchronisation instantanée via WebSocket |
-|  Notifications** | Toast, sonores, push, vibration |
-|  Récurrence** | Hebdomadaire, bimensuel, mensuel, annuel |
-|  Couleurs** | Événements colorés pour une lecture rapide |
-|  Recherche** | Filtre par titre ou description |
-|  Import/Export** | ICS (calendrier) et JSON (sauvegarde) |
-|  APK Android** | Application native via Capacitor |
+|  Vue Calendrier | Navigation mois/semaine/jour avec sélection rapide |
+|  Agenda | Liste des événements à venir groupés par date |
+| *Membres | Liste des participants, code d'invitation à partager |
+|  Temps réel | Synchronisation instantanée via WebSocket |
+|  Notifications | Toast, sonores, push, vibration |
+|  Récurrence | Hebdomadaire, bimensuel, mensuel, annuel |
+|  Couleurs | Événements colorés pour une lecture rapide |
+|  Recherche | Filtre par titre ou description |
+|  Import/Expore | ICS (calendrier) et JSON (sauvegarde) |
+|  APK Android | Application native via Capacitor |
 
  Démarrage rapide
 
