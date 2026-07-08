@@ -1,7 +1,11 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Trash2, Calendar as CalendarIcon, User, X, Pencil, Repeat, Search, List, Grid3x3, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import {
+  ChevronLeft, ChevronRight, Plus, Trash2, Calendar as CalendarIcon,
+  User, X, Pencil, Repeat, Search, List, Grid3x3, ChevronDown,
+  Clock, Info, CalendarDays
+} from 'lucide-react';
 
-const COLORS = ['#6366f1', '#a855f7', '#10b981', '#f59e0b', '#ef4444'];
+const COLORS = ['#6366f1', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#f97316'];
 
 const emptyForm = { title: '', start: '12:00', end: '', description: '', color: COLORS[0], recType: '', recDays: [], recWeek2Days: [], recDuration: '' };
 const monthNames = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -9,19 +13,36 @@ const dayNames = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
 const recLabel = (r) => {
   if (!r) return '';
-  if (r.type === 'weekly') {
-    if (r.week2Days) return '1 sem./2';
-    return 'Chaque sem.';
-  }
+  if (r.type === 'weekly') return r.week2Days ? '1 sem./2' : 'Chaque sem.';
   if (r.type === 'monthly') return 'Tous les mois';
   if (r.type === 'yearly') return 'Tous les ans';
   return '';
 };
 
-export default function CalendarView({ calendar, username, apiBaseUrl, onAddEvent, onUpdateEvent, onDeleteEvent }) {
+function getWeekNumber(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const dayNum = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dayNum + 3);
+  const firstThursday = d.valueOf();
+  d.setMonth(0, 1);
+  if (d.getDay() !== 4) {
+    d.setMonth(0, 1 + ((4 - d.getDay()) + 7) % 7);
+  }
+  return 1 + Math.ceil((firstThursday - d) / 604800000);
+}
+
+export default function CalendarView({ calendar, username, apiBaseUrl, onAddEvent, onUpdateEvent, onDeleteEvent, addTrigger, goToDate }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [currentDate, setCurrentDate] = useState(new Date());
+
+  useEffect(() => {
+    if (goToDate) {
+      setSelectedDate(goToDate);
+      const d = new Date(goToDate + 'T12:00:00');
+      setCurrentDate(new Date(d.getFullYear(), d.getMonth(), 1));
+    }
+  }, [goToDate]);
   const [viewMode, setViewMode] = useState('month');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSheetOpen, setIsSheetOpen] = useState(false);
@@ -29,6 +50,9 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
   const [form, setForm] = useState({ ...emptyForm });
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const [detailEvent, setDetailEvent] = useState(null);
+  const [swipingId, setSwipingId] = useState(null);
+  const [swipeX, setSwipeX] = useState(0);
 
   const activeYear = currentDate.getFullYear();
   const activeMonth = currentDate.getMonth();
@@ -43,7 +67,6 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     const adjustedFirstDay = firstDayIndex === 0 ? 6 : firstDayIndex - 1;
     const numDays = new Date(activeYear, activeMonth + 1, 0).getDate();
     const prevNumDays = new Date(activeYear, activeMonth, 0).getDate();
-
     for (let i = adjustedFirstDay - 1; i >= 0; i--) days.push({ dayNum: prevNumDays - i, dateString: '', isCurrentMonth: false, date: null });
     for (let d = 1; d <= numDays; d++) {
       const dateString = `${activeYear}-${String(activeMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -56,7 +79,19 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
   const calendarDays = useMemo(getDaysInMonth, [getDaysInMonth]);
   const events = useMemo(() => calendar.events || [], [calendar.events]);
 
-  const matchesRecurrence = useCallback((event, dateStr) => {
+  const weekNumbers = useMemo(() => {
+    const nums = [];
+    let lastWk = 0;
+    for (const day of calendarDays) {
+      if (!day.dateString) { nums.push(null); continue; }
+      const wk = getWeekNumber(day.dateString);
+      nums.push(wk !== lastWk ? wk : null);
+      lastWk = wk;
+    }
+    return nums;
+  }, [calendarDays]);
+
+const matchesRecurrence = useCallback((event, dateStr) => {
     if (!event.recurrence) return false;
     const rec = event.recurrence;
     const targetDate = new Date(dateStr + 'T12:00:00');
@@ -66,10 +101,16 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     switch (rec.type) {
       case 'weekly': {
         const dow = targetDate.getDay() || 7;
-        const diffDays = Math.round((targetDate - eventDate) / 86400000);
-        const diffWeeks = Math.floor(diffDays / 7);
-        if (rec.week2Days) {
-          return diffWeeks % 2 === 0 ? rec.days.includes(dow) : rec.week2Days.includes(dow);
+        const isBiweekly = 'week2Days' in rec;
+        if (isBiweekly) {
+          const targetWeek = getWeekNumber(dateStr);
+          const anchorWeek = getWeekNumber(rec._anchorDate || event.date);
+          const inEvenWeek = ((targetWeek - anchorWeek) % 2 + 2) % 2 === 0;
+          if (inEvenWeek) {
+            return rec.days && rec.days.length > 0 ? rec.days.includes(dow) : false;
+          } else {
+            return rec.week2Days && rec.week2Days.length > 0 ? rec.week2Days.includes(dow) : false;
+          }
         }
         return rec.days?.includes(dow);
       }
@@ -92,7 +133,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     for (const e of events) {
       if (eventOnDate(e, dateStr)) colors.push(e.color);
     }
-    return Array.from(new Set(colors)).slice(0, 3);
+    return Array.from(new Set(colors)).slice(0, 4);
   }, [events, eventOnDate]);
 
   const getEventsForDate = useCallback((dateStr) => {
@@ -118,8 +159,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     if (!searchQuery.trim()) return selectedDayEvents;
     const q = searchQuery.toLowerCase();
     return selectedDayEvents.filter(e =>
-      e.title.toLowerCase().includes(q) ||
-      (e.description && e.description.toLowerCase().includes(q))
+      e.title.toLowerCase().includes(q) || (e.description && e.description.toLowerCase().includes(q))
     );
   }, [selectedDayEvents, searchQuery]);
 
@@ -134,6 +174,10 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     setIsSheetOpen(true);
   }, []);
 
+  useEffect(() => {
+    if (addTrigger > 0) openAddSheet();
+  }, [addTrigger, openAddSheet]);
+
   const openEditSheet = useCallback((ev) => {
     setEditingEvent(ev);
     setForm({
@@ -144,6 +188,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
       recDuration: ev.recurrence?.duration || '',
     });
     setIsSheetOpen(true);
+    setDetailEvent(null);
   }, []);
 
   const closeSheet = useCallback(() => setIsSheetOpen(false), []);
@@ -153,7 +198,6 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     if (!form.title.trim() || !selectedDate || !form.start) return;
     if (form.end && form.start >= form.end) { alert("L'heure de fin doit être après l'heure de début."); return; }
     setLoading(true);
-
     try {
       let recurrence = null;
       if (form.recType) {
@@ -161,10 +205,13 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
           const hasWeekA = form.recDays.length > 0;
           const hasWeekB = form.recWeek2Days.length > 0;
           if (form.recType === 'biweekly' && !hasWeekA && hasWeekB) {
-            recurrence = { type: 'weekly', days: [], week2Days: [...form.recWeek2Days] };
+            recurrence = { type: 'weekly', days: [], week2Days: [...form.recWeek2Days], _anchorDate: selectedDate };
           } else if (hasWeekA || hasWeekB) {
             recurrence = { type: 'weekly', days: [...form.recDays] };
-            if (form.recType === 'biweekly') recurrence.week2Days = [...form.recWeek2Days];
+            if (form.recType === 'biweekly') {
+              recurrence.week2Days = [...form.recWeek2Days];
+              recurrence._anchorDate = selectedDate;
+            }
           } else {
             recurrence = { type: 'weekly', days: [new Date(selectedDate + 'T12:00:00').getDay() || 7] };
           }
@@ -178,38 +225,26 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
           recurrence.duration = form.recDuration;
         }
       }
-
       const payload = {
-        title: form.title.trim(),
-        date: selectedDate,
-        start: form.start,
-        end: form.end,
-        description: form.description.trim(),
-        creator: username,
-        color: form.color,
-        recurrence
+        title: form.title.trim(), date: selectedDate, start: form.start,
+        end: form.end, description: form.description.trim(), creator: username,
+        color: form.color, recurrence
       };
-
       if (editingEvent) {
         const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/event/${editingEvent.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event: payload })
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event: payload })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Erreur de modification");
         onUpdateEvent(data);
       } else {
         const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/event`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event: payload })
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event: payload })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Erreur d'enregistrement");
         onAddEvent(data);
       }
-
       setForm({ ...emptyForm });
       setEditingEvent(null);
       setIsSheetOpen(false);
@@ -220,23 +255,51 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
     }
   };
 
-  const handleDelete = async (eventId) => {
+  const deleteRef = useRef(null);
+  deleteRef.current = (eventId) => {
     const ev = events.find(e => e.id === eventId);
     const msg = ev?.recurrence ? "Supprimer cet événement récurrent ?" : "Annuler cet événement ?";
     if (!window.confirm(msg)) return;
     setDeleting(eventId);
-    try {
-      const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/event/${eventId}?username=${encodeURIComponent(username)}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erreur de suppression");
-      setTimeout(() => onDeleteEvent(eventId), 200);
-    } catch (err) {
-      alert("Erreur: " + err.message);
-      setDeleting(null);
-    }
+    (async () => {
+      try {
+        const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/event/${eventId}?username=${encodeURIComponent(username)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error("Erreur de suppression");
+        setTimeout(() => { onDeleteEvent(eventId); setDetailEvent(null); }, 200);
+      } catch (err) {
+        alert("Erreur: " + err.message);
+        setDeleting(null);
+      }
+    })();
   };
 
   const [yearPickerOpen, setYearPickerOpen] = useState(false);
+
+  const swipeState = useRef({ startX: 0, id: null });
+
+  const handleSwipeStart = (clientX, id) => {
+    swipeState.current = { startX: clientX, id };
+  };
+
+  const handleSwipeMove = (clientX, id) => {
+    const state = swipeState.current;
+    if (state.id !== id) return;
+    const diff = clientX - state.startX;
+    if (diff < 0) { setSwipingId(id); setSwipeX(Math.max(diff, -80)); }
+  };
+
+  const handleSwipeEnd = () => {
+    if (swipeX <= -50 && swipingId) { deleteRef.current(swipingId); }
+    setSwipingId(null); setSwipeX(0);
+  };
+
+  const handleTouchStart = (e, id) => handleSwipeStart(e.touches[0].clientX, id);
+  const handleTouchMove = (e, id) => handleSwipeMove(e.touches[0].clientX, id);
+  const handleTouchEnd = handleSwipeEnd;
+  const handleMouseDown = (e, id) => { e.preventDefault(); handleSwipeStart(e.clientX, id); };
+  const handleMouseMove = (e, id) => { if (swipeState.current.id) handleSwipeMove(e.clientX, id); };
+  const handleMouseUp = handleSwipeEnd;
+  const handleMouseLeave = handleSwipeEnd;
 
   return (
     <div className="calendar-view-container">
@@ -250,49 +313,41 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
             <div className="year-picker-dropdown">
               <div className="year-picker-grid">
                 {yearRange.map(y => (
-                  <button key={y} type="button"
-                    className={`year-picker-btn ${y === activeYear ? 'active' : ''}`}
-                    onClick={() => { setCurrentDate(new Date(y, activeMonth, 1)); setYearPickerOpen(false); }}
-                  >
-                    {y}
-                  </button>
+                  <button key={y} type="button" className={`year-picker-btn ${y === activeYear ? 'active' : ''}`}
+                    onClick={() => { setCurrentDate(new Date(y, activeMonth, 1)); setYearPickerOpen(false); }}>{y}</button>
                 ))}
               </div>
               <div className="month-picker-grid">
                 {monthNames.map((m, i) => (
-                  <button key={m} type="button"
-                    className={`year-picker-btn month-btn ${i === activeMonth ? 'active' : ''}`}
-                    onClick={() => { setCurrentDate(new Date(activeYear, i, 1)); setYearPickerOpen(false); }}
-                  >
-                    {m.slice(0, 3)}
-                  </button>
+                  <button key={m} type="button" className={`year-picker-btn month-btn ${i === activeMonth ? 'active' : ''}`}
+                    onClick={() => { setCurrentDate(new Date(activeYear, i, 1)); setYearPickerOpen(false); }}>{m.slice(0, 3)}</button>
                 ))}
               </div>
             </div>
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.25rem' }}>
-          <button type="button" className="icon-btn today-btn" onClick={goToday} aria-label="Aujourd'hui" title="Aujourd'hui" style={{ fontSize: '0.7rem', fontWeight: 700, width: 'auto', padding: '0 0.5rem' }}>Auj.</button>
+          <button type="button" className="icon-btn today-btn" onClick={goToday} aria-label="Aujourd'hui">Auj.</button>
           <button type="button" className="icon-btn" onClick={nextMonth} aria-label="Mois suivant"><ChevronRight size={20} /></button>
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.75rem' }}>
         <button type="button" onClick={() => setCurrentDate(new Date(activeYear, activeMonth - 1, 1))} className="icon-btn" style={{ fontSize: '0.7rem' }}>{monthNames[(activeMonth + 11) % 12].slice(0, 3)}</button>
-        {['month', 'week'].map(m => (
+        {['month', 'week', 'day'].map(m => (
           <button key={m} type="button"
             className={`day-toggle ${viewMode === m ? 'active' : ''}`}
             onClick={() => setViewMode(m)}
             style={{ flex: 1 }}
           >
-            {m === 'month' ? <Grid3x3 size={14} /> : <List size={14} />}
-            <span style={{ marginLeft: '0.25rem' }}>{m === 'month' ? 'Mois' : 'Semaine'}</span>
+            {m === 'month' ? <Grid3x3 size={14} /> : m === 'week' ? <List size={14} /> : <Clock size={14} />}
+            <span style={{ marginLeft: '0.25rem' }}>{m === 'month' ? 'Mois' : m === 'week' ? 'Semaine' : 'Jour'}</span>
           </button>
         ))}
         <button type="button" onClick={() => setCurrentDate(new Date(activeYear, activeMonth + 1, 1))} className="icon-btn" style={{ fontSize: '0.7rem' }}>{monthNames[(activeMonth + 1) % 12].slice(0, 3)}</button>
       </div>
 
-      {viewMode === 'month' ? (
+      {viewMode === 'month' && (
         <div className="calendar-grid">
           <div className="weekdays">
             {dayNames.map(d => <span key={d}>{d}</span>)}
@@ -304,25 +359,29 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
               const dots = getEventDotsForDate(day.dateString);
               const dayEvts = getEventsForDate(day.dateString);
               const hasRecurring = dayEvts.length > 0 && dayEvts.some(e => e.date !== day.dateString && e.recurrence);
+              const wkNum = weekNumbers[idx];
               return (
                 <button type="button" key={idx}
                   className={`day-cell ${!day.isCurrentMonth ? 'inactive' : ''} ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}`}
                   onClick={() => day.dateString && setSelectedDate(day.dateString)}
                   disabled={!day.isCurrentMonth}
                 >
-                  <span>{day.dayNum}</span>
+                  {wkNum !== null && <span className="week-num">{wkNum}</span>}
+                  <span className="day-num">{day.dayNum}</span>
                   {dots.length > 0 && (
                     <div className="day-dot-container">
-                      {dots.map((c, di) => <span key={di} className="day-dot" style={{ backgroundColor: c, opacity: isSelected ? 0.9 : 1 }} />)}
+                      {dots.map((c, di) => <span key={di} className="day-dot" style={{ backgroundColor: c }} />)}
                     </div>
                   )}
-                  {hasRecurring && <Repeat size={6} style={{ position: 'absolute', bottom: 1, right: 2, opacity: 0.5 }} />}
+                  {hasRecurring && <Repeat size={6} style={{ position: 'absolute', bottom: 1, right: 2, opacity: 0.4 }} />}
                 </button>
               );
             })}
           </div>
         </div>
-      ) : (
+      )}
+
+      {viewMode === 'week' && (
         <div className="week-view">
           {weekDays.map((d, i) => (
             <button key={i} type="button"
@@ -336,16 +395,48 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
               <div className="week-day-events">
                 {d.events.length === 0 ? (
                   <span className="week-day-empty">Aucun</span>
-                ) : (
-                  d.events.slice(0, 2).map(ev => (
-                    <span key={ev.id} className="week-day-event-dot" style={{ backgroundColor: ev.color }}>
-                      {ev.start} {ev.title}
-                    </span>
-                  ))
-                )}
+                ) : d.events.slice(0, 3).map(ev => (
+                  <span key={ev.id} className="week-day-event-dot" style={{ backgroundColor: ev.color }}>
+                    {ev.start} {ev.title}
+                  </span>
+                ))}
+                {d.events.length > 3 && <span className="week-day-empty">+{d.events.length - 3} autres</span>}
               </div>
             </button>
           ))}
+        </div>
+      )}
+
+      {viewMode === 'day' && (
+        <div className="day-view">
+          <div className="day-view-header">
+            <span>{new Date(selectedDate).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+          </div>
+          <div className="day-grid">
+            {Array.from({ length: 24 }, (_, h) => {
+              const hourStr = `${String(h).padStart(2, '0')}:00`;
+              const hourEvents = selectedDayEvents.filter(e => {
+                const eh = parseInt(e.start.split(':')[0]);
+                return eh === h || (eh < h && parseInt(e.end?.split(':')[0] || eh) > h);
+              });
+              const isNow = todayStr === selectedDate && h === new Date().getHours();
+              return (
+                <div key={h} className={`day-hour-row ${isNow ? 'now' : ''}`}>
+                  <span className="day-hour-label">{hourStr}</span>
+                  <div className="day-hour-line">
+                    {isNow && <span className="day-now-indicator" />}
+                    {hourEvents.map(ev => (
+                      <div key={ev.id} className="day-hour-event" style={{ backgroundColor: ev.color + '30', borderLeftColor: ev.color }}
+                        onClick={() => setDetailEvent(ev)}>
+                        <span className="day-hour-event-title">{ev.title}</span>
+                        <span className="day-hour-event-time">{ev.start}{ev.end ? `-${ev.end}` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -359,7 +450,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
         <h3>
           {new Date(selectedDate).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
         </h3>
-        <span>{filteredEvents.length} événement(s)</span>
+        <span className="event-count-badge">{filteredEvents.length} événement(s)</span>
       </div>
 
       <div className="events-container">
@@ -367,41 +458,92 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
           <div className="no-events">
             <CalendarIcon size={36} />
             <p>{searchQuery ? "Aucun résultat" : "Aucun événement de prévu"}</p>
+            <button type="button" className="btn-primary" onClick={openAddSheet} style={{ marginTop: '0.5rem', padding: '0.6rem 1.2rem', fontSize: '0.85rem' }}>
+              <Plus size={16} /> Ajouter un événement
+            </button>
           </div>
         ) : (
           filteredEvents.map(event => (
-            <div key={event.id} className={`event-card ${deleting === event.id ? 'deleting' : 'slideIn'}`} style={{ '--event-color': event.color }}>
+            <div
+              key={event.id}
+              className={`event-card ${deleting === event.id ? 'deleting' : ''} ${swipingId === event.id ? 'swiping' : ''}`}
+              style={{ '--event-color': event.color, transform: swipingId === event.id ? `translateX(${swipeX}px)` : 'none' }}
+              onClick={() => setDetailEvent(event)}
+              onTouchStart={(e) => handleTouchStart(e, event.id)}
+              onTouchMove={(e) => handleTouchMove(e, event.id)}
+              onTouchEnd={handleTouchEnd}
+              onMouseDown={(e) => handleMouseDown(e, event.id)}
+              onMouseMove={(e) => handleMouseMove(e, event.id)}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+            >
               <div className="event-time-col">
                 <span className="event-time-start">{event.start}</span>
-                {event.end && <span className="event-time-end">à {event.end}</span>}
+                {event.end && <span className="event-time-end">{event.end}</span>}
                 {event.recurrence && <Repeat size={10} style={{ marginTop: '0.25rem', opacity: 0.5 }} title={recLabel(event.recurrence)} />}
               </div>
+              <div className="event-color-strip" style={{ backgroundColor: event.color }} />
               <div className="event-detail-col">
                 <h4>{event.title}</h4>
-                {event.description && <p>{event.description}</p>}
+                {event.description && <p className="event-desc-preview">{event.description.length > 50 ? event.description.slice(0, 50) + '…' : event.description}</p>}
                 <div className="event-creator-badge">
                   <User size={10} />
                   <span>Par {event.creator === username ? 'vous' : event.creator}</span>
                   {event.recurrence && <span className="rec-badge">{recLabel(event.recurrence)}</span>}
                 </div>
               </div>
-              <div className="event-action-col">
-                <button type="button" className="btn-icon-action" onClick={() => openEditSheet(event)} title="Modifier" aria-label="Modifier">
-                  <Pencil size={14} />
-                </button>
-                <button type="button" className="btn-icon-action btn-delete" onClick={() => handleDelete(event.id)} title="Supprimer" aria-label="Supprimer" disabled={deleting === event.id}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
+              <div className="event-swipe-hint">Supprimer</div>
             </div>
           ))
         )}
       </div>
 
-      <button type="button" className="fab-btn" onClick={openAddSheet} aria-label="Ajouter un événement">
-        <Plus size={28} />
-      </button>
+      {/* Detail modal */}
+      {detailEvent && (
+        <div className="detail-overlay" onClick={() => setDetailEvent(null)}>
+          <div className="detail-modal" onClick={e => e.stopPropagation()} style={{ '--event-color': detailEvent.color }}>
+            <button type="button" className="detail-close" onClick={() => setDetailEvent(null)}><X size={20} /></button>
+            <div className="detail-color-bar" style={{ backgroundColor: detailEvent.color }} />
+            <div className="detail-body">
+              <h2 className="detail-title">{detailEvent.title}</h2>
+              <div className="detail-info-row">
+                <CalendarDays size={16} />
+                <span>{new Date(detailEvent.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
+              </div>
+              <div className="detail-info-row">
+                <Clock size={16} />
+                <span>{detailEvent.start}{detailEvent.end ? ` → ${detailEvent.end}` : ''}</span>
+              </div>
+              {detailEvent.recurrence && (
+                <div className="detail-info-row">
+                  <Repeat size={16} />
+                  <span>Répète : {recLabel(detailEvent.recurrence)}</span>
+                </div>
+              )}
+              {detailEvent.description && (
+                <div className="detail-info-row" style={{ alignItems: 'flex-start' }}>
+                  <Info size={16} style={{ marginTop: 2 }} />
+                  <span style={{ lineHeight: 1.5 }}>{detailEvent.description}</span>
+                </div>
+              )}
+              <div className="detail-info-row">
+                <User size={16} />
+                <span>Créé par {detailEvent.creator === username ? 'vous' : detailEvent.creator}</span>
+              </div>
+              <div className="detail-actions">
+                <button type="button" className="btn-primary" onClick={() => openEditSheet(detailEvent)} style={{ flex: 1 }}>
+                  <Pencil size={16} /> Modifier
+                </button>
+                <button type="button" className="btn-secondary btn-danger" onClick={() => handleDelete(detailEvent.id)} style={{ flex: 1 }} disabled={deleting === detailEvent.id}>
+                  <Trash2 size={16} /> Supprimer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
+      {/* Bottom sheet */}
       <div className={`bottom-sheet-overlay ${isSheetOpen ? 'open' : ''}`} onClick={closeSheet}>
         <div className="bottom-sheet" onClick={e => e.stopPropagation()}>
           <div className="bottom-sheet-handle" />
@@ -409,38 +551,33 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
             <h3>{editingEvent ? "Modifier l'événement" : 'Nouvel Événement'}</h3>
             <button type="button" className="icon-btn" onClick={closeSheet}><X size={20} /></button>
           </div>
-
           <form onSubmit={submitEvent} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div className="input-group">
-              <label htmlFor="event-title">Titre</label>
-              <input id="event-title" type="text" className="input-field" placeholder="Ex: Réunion" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} maxLength={40} required />
+              <label>Titre</label>
+              <input type="text" className="input-field" placeholder="Ex: Réunion" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} maxLength={40} required />
             </div>
-
             <div className="form-row">
               <div className="input-group">
-                <label htmlFor="event-start">Début</label>
-                <input id="event-start" type="time" className="input-field" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} required />
+                <label>Début</label>
+                <input type="time" className="input-field" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} required />
               </div>
               <div className="input-group">
-                <label htmlFor="event-end">Fin (opt.)</label>
-                <input id="event-end" type="time" className="input-field" value={form.end} onChange={e => setForm(f => ({ ...f, end: e.target.value }))} />
+                <label>Fin (opt.)</label>
+                <input type="time" className="input-field" value={form.end} onChange={e => setForm(f => ({ ...f, end: e.target.value }))} />
               </div>
             </div>
-
             <div className="input-group">
-              <label htmlFor="event-desc">Description</label>
-              <textarea id="event-desc" className="input-field" placeholder="Détails..." value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} style={{ resize: 'none', height: '80px' }} maxLength={150} />
+              <label>Description</label>
+              <textarea className="input-field" placeholder="Détails..." value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} style={{ resize: 'none', height: '80px' }} maxLength={150} />
             </div>
-
             <div className="input-group">
               <label>Couleur</label>
               <div className="color-picker">
                 {COLORS.map(color => (
-                  <button key={color} type="button" className={`color-dot ${form.color === color ? 'selected' : ''}`} style={{ backgroundColor: color }} onClick={() => setForm(f => ({ ...f, color }))} aria-label={`Couleur ${color}`} />
+                  <button key={color} type="button" className={`color-dot ${form.color === color ? 'selected' : ''}`} style={{ backgroundColor: color }} onClick={() => setForm(f => ({ ...f, color }))} />
                 ))}
               </div>
             </div>
-
             <div className="input-group" style={{ borderTop: '1px solid var(--border-light)', paddingTop: '1rem' }}>
               <label>Répétition</label>
               <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -454,9 +591,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
                   <button key={opt.value} type="button"
                     className={`day-toggle ${form.recType === opt.value ? 'active' : ''}`}
                     onClick={() => setForm(f => ({ ...f, recType: f.recType === opt.value ? '' : opt.value }))}
-                  >
-                    {opt.label}
-                  </button>
+                  >{opt.label}</button>
                 ))}
               </div>
               {(form.recType === 'weekly' || form.recType === 'biweekly') && (
@@ -470,14 +605,8 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
                       return (
                         <button key={d} type="button"
                           className={`day-toggle ${form.recDays.includes(dayNum) ? 'active' : ''}`}
-                          onClick={() => setForm(f => ({
-                            ...f, recDays: f.recDays.includes(dayNum)
-                              ? f.recDays.filter(x => x !== dayNum)
-                              : [...f.recDays, dayNum]
-                          }))}
-                        >
-                          {d}
-                        </button>
+                          onClick={() => setForm(f => ({ ...f, recDays: f.recDays.includes(dayNum) ? f.recDays.filter(x => x !== dayNum) : [...f.recDays, dayNum] }))}
+                        >{d}</button>
                       );
                     })}
                   </div>
@@ -485,23 +614,15 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
               )}
               {form.recType === 'biweekly' && (
                 <div style={{ marginTop: '0.5rem' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                    Semaine B
-                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>Semaine B</div>
                   <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                     {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((d, i) => {
                       const dayNum = i + 1;
                       return (
                         <button key={d} type="button"
                           className={`day-toggle ${form.recWeek2Days.includes(dayNum) ? 'active' : ''}`}
-                          onClick={() => setForm(f => ({
-                            ...f, recWeek2Days: f.recWeek2Days.includes(dayNum)
-                              ? f.recWeek2Days.filter(x => x !== dayNum)
-                              : [...f.recWeek2Days, dayNum]
-                          }))}
-                        >
-                          {d}
-                        </button>
+                          onClick={() => setForm(f => ({ ...f, recWeek2Days: f.recWeek2Days.includes(dayNum) ? f.recWeek2Days.filter(x => x !== dayNum) : [...f.recWeek2Days, dayNum] }))}
+                        >{d}</button>
                       );
                     })}
                   </div>
@@ -509,9 +630,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
               )}
               {form.recType && (
                 <div style={{ marginTop: '0.75rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '0.5rem' }}>
-                    Pendant
-                  </label>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '0.5rem' }}>Pendant</label>
                   <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                     {[
                       { value: '', label: 'Illimité' },
@@ -522,9 +641,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
                       <button key={opt.value} type="button"
                         className={`day-toggle ${form.recDuration === opt.value ? 'active' : ''}`}
                         onClick={() => setForm(f => ({ ...f, recDuration: f.recDuration === opt.value ? '' : opt.value }))}
-                      >
-                        {opt.label}
-                      </button>
+                      >{opt.label}</button>
                     ))}
                   </div>
                 </div>
@@ -532,7 +649,7 @@ export default function CalendarView({ calendar, username, apiBaseUrl, onAddEven
             </div>
             <div className="form-actions">
               <button type="submit" className="btn-primary" disabled={loading}>
-                {loading ? 'Enregistrement...' : editingEvent ? 'Enregistrer les modifications' : 'Ajouter au Calendrier'}
+                {loading ? 'Enregistrement...' : editingEvent ? 'Enregistrer' : 'Ajouter'}
               </button>
               <button type="button" className="btn-secondary" onClick={closeSheet}>Annuler</button>
             </div>

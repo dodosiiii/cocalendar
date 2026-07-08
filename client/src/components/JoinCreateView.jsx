@@ -75,7 +75,7 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
         throw new Error(data.error || 'Erreur lors de la connexion.');
       }
       
-      onJoined(data, username.trim());
+      onJoined(data, username.trim(), data.token);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -125,7 +125,7 @@ export default function JoinCreateView({ onJoined, apiBaseUrl, serverOrigin, onS
         throw new Error(joinData.error || 'Erreur lors du raccordement.');
       }
       
-      onJoined(joinData, username.trim());
+      onJoined(joinData, username.trim(), joinData.token);
     } catch (err) {
       setError(err.message);
     } finally {

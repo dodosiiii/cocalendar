@@ -174,15 +174,18 @@ app.post('/api/calendar/create', authLimiter, (req, res) => {
   const code = generateCode();
   const data = readData();
 
+  const token = crypto.randomUUID();
+
   data.calendars[code] = {
     name, code, creator,
     createdAt: new Date().toISOString(),
     members: [creator],
+    tokens: { [creator]: token },
     events: []
   };
 
   writeData(data);
-  res.json({ code, name, creator });
+  res.json({ code, name, creator, token });
 });
 
 app.post('/api/calendar/:code/join', (req, res) => {
@@ -192,6 +195,8 @@ app.post('/api/calendar/:code/join', (req, res) => {
   const result = getCalendarWithData(req.params.code);
   if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
   const { data, cal } = result;
+
+  if (!cal.tokens) cal.tokens = {};
 
   if (!cal.members.includes(username)) {
     cal.members.push(username);
@@ -206,6 +211,35 @@ app.post('/api/calendar/:code/join', (req, res) => {
         timestamp: new Date().toISOString()
       }
     });
+  }
+
+  let token = cal.tokens[username];
+  if (!token) {
+    token = crypto.randomUUID();
+    cal.tokens[username] = token;
+    writeData(data);
+  }
+
+  res.json({
+    code: cal.code, name: cal.name,
+    members: cal.members, events: cal.events,
+    token
+  });
+});
+
+app.post('/api/calendar/:code/reconnect', (req, res) => {
+  const { username, token } = req.body;
+  if (!username || !token) {
+    return res.status(400).json({ error: 'Pseudo et token requis.' });
+  }
+
+  const result = getCalendarWithData(req.params.code);
+  if (!result) return res.status(404).json({ error: 'Calendrier introuvable.' });
+  const { cal } = result;
+
+  if (!cal.tokens) cal.tokens = {};
+  if (cal.tokens[username] !== token) {
+    return res.status(403).json({ error: 'Session expirée. Veuillez rejoindre le calendrier à nouveau.' });
   }
 
   res.json({

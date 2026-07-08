@@ -1,10 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { Share2, Users, Upload, Download, Check, AlertCircle, LogOut, Globe, Smartphone, HardDrive, RefreshCw, ExternalLink } from 'lucide-react';
+import { Upload, Download, AlertCircle, LogOut, Globe, Smartphone, HardDrive, RefreshCw, ExternalLink } from 'lucide-react';
 import { parseIcs } from '../utils/IcsParser';
 import { shouldShowIosInstallHint, isNativeApp } from '../utils/platform';
 
 export default function SettingsView({ calendar, username, apiBaseUrl, serverOrigin, onImportSuccess, onLeave }) {
-  const [copied, setCopied] = useState(false);
   const [importedEvents, setImportedEvents] = useState([]);
   const [fileName, setFileName] = useState('');
   const [importing, setImporting] = useState(false);
@@ -13,12 +12,6 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
   const [error, setError] = useState('');
   const fileInputRef = useRef(null);
   const restoreInputRef = useRef(null);
-
-  const copyCode = () => {
-    navigator.clipboard.writeText(calendar.code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleBackup = () => {
     try {
@@ -46,14 +39,11 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
     if (!file) return;
     setRestoring(true);
     setError('');
-
     try {
       const text = await file.text();
       const backup = JSON.parse(text);
       if (!backup.events || !Array.isArray(backup.events)) throw new Error('Fichier de sauvegarde invalide.');
-
       if (!window.confirm(`Restaurer ${backup.events.length} événements dans "${calendar.name}" ? Cela remplacera tous les événements actuels.`)) return;
-
       const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -61,7 +51,6 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur de restauration');
-
       alert(`${data.count} événements restaurés !`);
       onImportSuccess(data);
     } catch (err) {
@@ -75,10 +64,8 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     setFileName(file.name);
     setError('');
-
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -103,7 +90,6 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
     if (!importedEvents.length) return;
     setImporting(true);
     setError('');
-
     try {
       const res = await fetch(`${apiBaseUrl}/api/calendar/${calendar.code}/import`, {
         method: 'POST',
@@ -112,7 +98,6 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Erreur d'importation");
-
       alert(`${importedEvents.length} événements importés !`);
       onImportSuccess(data);
       setImportedEvents([]);
@@ -147,7 +132,7 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
     <div className="settings-container">
       {shouldShowIosInstallHint() && (
         <div className="settings-card">
-          <h4><Smartphone size={18} color="var(--secondary)" /> Installer sur iPhone</h4>
+          <h4><Smartphone size={18} color="#a855f7" /> Installer sur iPhone</h4>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
             Ouvrez dans <strong>Safari</strong>, touchez <strong>Partager</strong> → <strong>Sur l'écran d'accueil</strong>.
           </p>
@@ -156,7 +141,7 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
 
       {isNativeApp() && serverOrigin && (
         <div className="settings-card">
-          <h4><Smartphone size={18} color="var(--success)" /> Application Android</h4>
+          <h4><Smartphone size={18} color="#10b981" /> Application Android</h4>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Connectée au serveur pour la synchronisation.</p>
         </div>
       )}
@@ -168,40 +153,17 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
         </div>
       )}
 
-      <div className="settings-card">
-        <h4><Share2 size={18} color="var(--primary)" /> Partager</h4>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Donnez ce code pour inviter :</p>
-        <div className="calendar-code-box">
-          <span className="calendar-code-text">{calendar.code}</span>
-          <button type="button" className="btn-copy" onClick={copyCode}>
-            {copied ? <Check size={14} /> : null} {copied ? 'Copié !' : 'Copier'}
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-card">
-        <h4><Users size={18} color="var(--secondary)" /> Membres ({calendar.members?.length || 0})</h4>
-        <div className="member-list">
-          {calendar.members?.map((member, idx) => (
-            <div key={idx} className="member-item">
-              <div className="member-avatar">{member.substring(0, 2).toUpperCase()}</div>
-              <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{member} {member === username ? '(vous)' : ''}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="settings-card" style={{ borderColor: 'rgba(16, 185, 129, 0.3)' }}>
+      <div className="settings-card" style={{ borderColor: 'rgba(34, 197, 94, 0.2)' }}>
         <h4><HardDrive size={18} color="#10b981" /> Sauvegarde locale</h4>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-          Sauvegardez votre calendrier sur votre appareil pour le restaurer en cas de problème.
+          Sauvegardez votre calendrier sur votre appareil.
         </p>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button type="button" className="btn-secondary" style={{ flex: 1, gap: '0.35rem' }} onClick={handleBackup}>
             <Download size={16} /> Sauvegarder
           </button>
-          <button type="button" className="btn-secondary" style={{ flex: 1, gap: '0.35rem', borderColor: 'rgba(245, 158, 11, 0.3)' }} onClick={triggerRestoreSelect} disabled={restoring}>
-            {restoring ? <><RefreshCw size={16} className="spin" /> Restauration...</> : <><Upload size={16} /> Restaurer</>}
+          <button type="button" className="btn-secondary" style={{ flex: 1, gap: '0.35rem', borderColor: 'rgba(245, 158, 11, 0.2)' }} onClick={triggerRestoreSelect} disabled={restoring}>
+            {restoring ? <><RefreshCw size={16} className="loading-spinner" /> Restauration...</> : <><Upload size={16} /> Restaurer</>}
           </button>
         </div>
         {backupStatus === 'ok' && <p style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.5rem' }}>Sauvegarde téléchargée ✓</p>}
@@ -210,7 +172,7 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
       </div>
 
       <div className="settings-card">
-        <h4><Share2 size={18} color="var(--primary)" /> Exporter</h4>
+        <h4><Download size={18} color="var(--primary)" /> Exporter</h4>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Format ICS pour vos autres calendriers.</p>
         <button type="button" className="btn-secondary" style={{ width: '100%' }} onClick={handleExport}>
           <Download size={16} /> Télécharger .ics
@@ -218,11 +180,9 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
       </div>
 
       <div className="settings-card">
-        <h4><Upload size={18} color="#10b981" /> Importer .ics</h4>
+        <h4><Upload size={18} color="var(--primary)" /> Importer .ics</h4>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Importez depuis un autre calendrier.</p>
-
         <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".ics" onChange={handleFileChange} />
-
         <div className="file-dropzone" onClick={triggerFileSelect}>
           <Upload size={28} color="var(--text-dim)" />
           {fileName ? (
@@ -231,13 +191,11 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
             <div><p style={{ color: 'var(--text-main)', fontWeight: 500 }}>Choisir un fichier .ics</p><p style={{ fontSize: '0.75rem' }}>Maximum 500 Ko</p></div>
           )}
         </div>
-
         {error && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.75rem', color: 'var(--danger)', fontSize: '0.8rem' }}>
             <AlertCircle size={16} /><span>{error}</span>
           </div>
         )}
-
         {importedEvents.length > 0 && (
           <div style={{ marginTop: '0.75rem' }}>
             <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Aperçu ({importedEvents.length}) :</p>
@@ -256,14 +214,10 @@ export default function SettingsView({ calendar, username, apiBaseUrl, serverOri
         )}
       </div>
 
-      <div className="settings-card" style={{ borderColor: 'rgba(99, 102, 241, 0.2)' }}>
+      <div className="settings-card">
         <h4><ExternalLink size={18} color="var(--primary)" /> Code source</h4>
-        <a
-          href="https://github.com/dodosiiii/cocalendar"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ fontSize: '0.85rem', color: 'var(--primary)', wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-        >
+        <a href="https://github.com/dodosiiii/cocalendar" target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: '0.85rem', color: 'var(--primary)', wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}>
           github.com/dodosiiii/cocalendar <ExternalLink size={14} />
         </a>
       </div>

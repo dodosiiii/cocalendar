@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Calendar as CalendarIcon, Settings, Bell, X, RefreshCw } from 'lucide-react';
+import { Calendar as CalendarIcon, Settings, Bell, X, RefreshCw, Plus, List, Users } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import JoinCreateView from './components/JoinCreateView';
 import CalendarView from './components/CalendarView';
+import AgendaView from './components/AgendaView';
+import MembersView from './components/MembersView';
 import SettingsView from './components/SettingsView';
 import IosInstallBanner from './components/IosInstallBanner';
 import { getApiBaseUrl, getWsBaseUrl, resolveServerOrigin } from './config/serverUrl';
@@ -55,6 +57,9 @@ export default function App() {
   const [restoring, setRestoring] = useState(true);
   const [fetchError, setFetchError] = useState('');
 
+  const [addTrigger, setAddTrigger] = useState(0);
+  const [navigateDate, setNavigateDate] = useState(null);
+
   const API_BASE_URL = useMemo(() => getApiBaseUrl(serverOrigin), [serverOrigin]);
   const WS_BASE_URL = useMemo(() => getWsBaseUrl(serverOrigin), [serverOrigin]);
 
@@ -65,8 +70,21 @@ export default function App() {
   const pushRegisteredRef = useRef(false);
   const restoringRef = useRef(true);
   const calendarRef = useRef(null);
+  const containerRef = useRef(null);
 
   useEffect(() => { calendarRef.current = calendar; }, [calendar]);
+
+  // Ajustement de la hauteur quand le clavier virtuel s'ouvre (mobile)
+  useEffect(() => {
+    if (!window.visualViewport) return;
+    const handler = () => {
+      if (containerRef.current) {
+        containerRef.current.style.height = `${window.visualViewport.height}px`;
+      }
+    };
+    window.visualViewport.addEventListener('resize', handler);
+    return () => window.visualViewport.removeEventListener('resize', handler);
+  }, []);
 
   // Sauvegarde des données en cache pour récupération immédiate après veille Render
   useEffect(() => {
@@ -98,7 +116,31 @@ export default function App() {
       localStorage.setItem('cocalendar_user', user);
       setRestoring(false);
     } catch (err) {
-      // Si on a déjà des données en cache, on les garde (serveur en veille Render)
+      if (calendarRef.current) {
+        setWsStatus('disconnected');
+      } else {
+        setCalendar(null);
+        setRestoring(false);
+        if (!restoringRef.current) setFetchError(err.message);
+      }
+    }
+  }, [API_BASE_URL]);
+
+  const reconnectWithToken = useCallback(async (code, user, token) => {
+    try {
+      setFetchError('');
+      setWsStatus('connecting');
+      const response = await fetch(`${API_BASE_URL}/api/calendar/${code.toUpperCase()}/reconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, token })
+      });
+      if (!response.ok) throw new Error("Session expirée.");
+      const data = await response.json();
+      setCalendar(data);
+      setUsername(user);
+      setRestoring(false);
+    } catch (err) {
       if (calendarRef.current) {
         setWsStatus('disconnected');
       } else {
@@ -115,11 +157,11 @@ export default function App() {
     setFetchError('');
     const savedCode = localStorage.getItem('cocalendar_code');
     const savedUser = localStorage.getItem('cocalendar_user');
+    const savedToken = localStorage.getItem('cocalendar_token');
 
     if (savedCode && savedUser && API_BASE_URL) {
       setUsername(savedUser);
 
-      // Restaurer les données depuis le cache pour un affichage immédiat
       try {
         const cached = sessionStorage.getItem('cocalendar_cache');
         if (cached) {
@@ -131,16 +173,16 @@ export default function App() {
         }
       } catch {}
 
-      fetchCalendar(savedCode, savedUser).then(() => {
-        restoringRef.current = false;
-      }, () => {
-        restoringRef.current = false;
-      });
+      const doFetch = savedToken
+        ? reconnectWithToken(savedCode, savedUser, savedToken)
+        : fetchCalendar(savedCode, savedUser);
+
+      doFetch.then(() => { restoringRef.current = false; }, () => { restoringRef.current = false; });
     } else {
       setRestoring(false);
       restoringRef.current = false;
     }
-  }, [API_BASE_URL, fetchCalendar]);
+  }, [API_BASE_URL, fetchCalendar, reconnectWithToken]);
 
   useEffect(() => {
     if (!isNativeApp()) return;
@@ -219,7 +261,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!calendar || !username || !WS_BASE_URL) return;
+    const code = calendar?.code;
+    if (!code || !username || !WS_BASE_URL) return;
 
     reconnectAttemptRef.current = 0;
 
@@ -234,7 +277,7 @@ export default function App() {
       ws.onopen = () => {
         setWsStatus('connected');
         reconnectAttemptRef.current = 0;
-        ws.send(JSON.stringify({ type: 'join', code: calendar.code, username }));
+        ws.send(JSON.stringify({ type: 'join', code, username }));
       };
 
       ws.onmessage = (event) => {
@@ -242,8 +285,14 @@ export default function App() {
           const data = JSON.parse(event.data);
 
           if (data.type === 'joined') {
-            // On première connexion ou reconnexion après veille : récupérer les events à jour
-            fetch(`${API_BASE_URL}/api/calendar/${calendar.code}`)
+            const savedToken = localStorage.getItem('cocalendar_token');
+            const fetchOpts = savedToken
+              ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, token: savedToken }) }
+              : {};
+            const url = savedToken
+              ? `${API_BASE_URL}/api/calendar/${code}/reconnect`
+              : `${API_BASE_URL}/api/calendar/${code}`;
+            fetch(url, fetchOpts)
               .then(r => r.json())
               .then(calData => {
                 setCalendar(prev => prev ? { ...prev, events: calData.events } : null);
@@ -271,7 +320,6 @@ export default function App() {
 
       ws.onclose = () => {
         setWsStatus('disconnected');
-        // Exponential backoff avec jitter : 1s, 2s, 4s, 8s, 16s, 30s max
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 30000);
         reconnectAttemptRef.current += 1;
         reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay + Math.random() * 1000);
@@ -282,14 +330,12 @@ export default function App() {
 
     connectWebSocket();
 
-    // Heartbeat client : envoie un ping toutes les 25s pour maintenir la connexion active
     pingIntervalRef.current = setInterval(() => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'ping' }));
       }
     }, 25000);
 
-    // Reconnexion immédiate quand le réseau revient (ex : sortie de veille)
     const handleOnline = () => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         reconnectAttemptRef.current = 0;
@@ -299,10 +345,8 @@ export default function App() {
     };
     window.addEventListener('online', handleOnline);
 
-    // Marquer déconnecté quand le réseau est perdu
     window.addEventListener('offline', () => setWsStatus('disconnected'));
 
-    // Reconnexion quand l'onglet redevient visible (ex : déverrouillage téléphone)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -328,11 +372,12 @@ export default function App() {
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 300);
   };
 
-  const handleJoined = (calendarData, user) => {
+  const handleJoined = (calendarData, user, token) => {
     setCalendar(calendarData);
     setUsername(user);
     localStorage.setItem('cocalendar_code', calendarData.code);
     localStorage.setItem('cocalendar_user', user);
+    if (token) localStorage.setItem('cocalendar_token', token);
   };
 
   const handleLeaveCalendar = async () => {
@@ -343,6 +388,7 @@ export default function App() {
     } catch {}
     localStorage.removeItem('cocalendar_code');
     localStorage.removeItem('cocalendar_user');
+    localStorage.removeItem('cocalendar_token');
     try { sessionStorage.removeItem('cocalendar_cache'); } catch {}
     setCalendar(null);
     setUsername('');
@@ -378,7 +424,7 @@ export default function App() {
 
   if (restoring) {
     return (
-      <div className="app-phone-container">
+      <div className="app-phone-container" ref={containerRef}>
         <div className="loading-screen">
           <div className="loading-spinner" />
           <p>Restauration de votre session...</p>
@@ -391,7 +437,7 @@ export default function App() {
     const savedCode = localStorage.getItem('cocalendar_code');
     const savedUser = localStorage.getItem('cocalendar_user');
     return (
-      <div className="app-phone-container">
+      <div className="app-phone-container" ref={containerRef}>
         <div className="loading-screen">
           <div className="auth-logo pulse-glow" style={{ marginBottom: '1.5rem' }}>
             <CalendarIcon size={40} color="white" />
@@ -408,6 +454,7 @@ export default function App() {
           <button type="button" className="btn-secondary" onClick={() => {
             localStorage.removeItem('cocalendar_code');
             localStorage.removeItem('cocalendar_user');
+            localStorage.removeItem('cocalendar_token');
             try { sessionStorage.removeItem('cocalendar_cache'); } catch {}
             setCalendar(null);
             setFetchError('');
@@ -421,7 +468,7 @@ export default function App() {
 
   if (!calendar) {
     return (
-      <div className="app-phone-container">
+      <div className="app-phone-container" ref={containerRef}>
         {shouldShowIosInstallHint() && <IosInstallBanner />}
         <JoinCreateView
           onJoined={handleJoined}
@@ -434,7 +481,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-phone-container">
+    <div className="app-phone-container" ref={containerRef}>
       {shouldShowIosInstallHint() && <IosInstallBanner />}
 
       <div className="notification-container">
@@ -473,6 +520,22 @@ export default function App() {
             onAddEvent={handleAddEventLocally}
             onUpdateEvent={handleUpdateEventLocally}
             onDeleteEvent={handleDeleteEventLocally}
+            addTrigger={addTrigger}
+            goToDate={navigateDate}
+          />
+        ) : activeTab === 'agenda' ? (
+          <AgendaView
+            events={calendar.events || []}
+            username={username}
+            onNavigateToDate={(dateStr) => {
+              setNavigateDate(dateStr);
+              setActiveTab('calendar');
+            }}
+          />
+        ) : activeTab === 'members' ? (
+          <MembersView
+            calendar={calendar}
+            username={username}
           />
         ) : (
           <SettingsView
@@ -491,9 +554,23 @@ export default function App() {
           <div className="nav-icon-wrapper"><CalendarIcon size={20} /></div>
           <span>Calendrier</span>
         </button>
+        <button type="button" className={`nav-item ${activeTab === 'agenda' ? 'active' : ''}`} onClick={() => setActiveTab('agenda')}>
+          <div className="nav-icon-wrapper"><List size={20} /></div>
+          <span>Agenda</span>
+        </button>
+        <button type="button" className={`nav-item ${activeTab === 'members' ? 'active' : ''}`} onClick={() => setActiveTab('members')}>
+          <div className="nav-icon-wrapper"><Users size={20} /></div>
+          <span>Membres</span>
+        </button>
         <button type="button" className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
           <div className="nav-icon-wrapper"><Settings size={20} /></div>
           <span>Réglages</span>
+        </button>
+        <button type="button" className="nav-fab" onClick={() => {
+          setActiveTab('calendar');
+          setAddTrigger(t => t + 1);
+        }} aria-label="Ajouter un événement">
+          <Plus size={22} />
         </button>
       </nav>
 

@@ -6,3 +6,11 @@ client/dist/
 .DS_Store
 .env
 .gemini/
+
+# Runtime logs
+server_err.log
+server_out.log
+server/pushSubscriptions.json
+*.ps1
+start-server.bat
+
